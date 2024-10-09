@@ -94,7 +94,7 @@ impl IndBuffer {
     }
 }
 
-/// The `'static` state of the `EspBtpGattPeripheral` struct.
+/// The `'static` state of the `TroubleBtpGattPeripheral` struct.
 /// Isolated as a separate struct to allow for `const fn` construction
 /// and static allocation.
 pub struct TroubleBtpGattContext<M, C>
@@ -123,7 +123,7 @@ where
         }
     }
 
-    /// Return an in-place initializer for `EspBtpGattContext`.
+    /// Return an in-place initializer for the type.
     #[allow(clippy::large_stack_frames)]
     pub fn init() -> impl Init<Self> {
         init!(Self {
