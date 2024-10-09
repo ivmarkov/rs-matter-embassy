@@ -23,10 +23,10 @@ TBD
 
 ## Future
 
-* Thread networking (for ESP32H2 and ESP32C6)
+* Thread networking
 * Device Attestation data support using secure flash storage
 * Setting system time via Matter
-* Matter OTA support based on the ESP IDF OTA API
+* Matter OTA support
 
 ## Build Prerequisites
 
