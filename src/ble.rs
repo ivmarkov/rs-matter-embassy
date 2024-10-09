@@ -12,7 +12,9 @@ use rs_matter::transport::network::btp::{
 };
 use rs_matter::transport::network::BtAddr;
 use rs_matter::utils::init::{init, Init};
+use rs_matter::utils::storage::Vec;
 use rs_matter::utils::sync::{IfMutex, Signal};
+
 use trouble_host::gatt::{GattEvent, GattServer};
 use trouble_host::prelude::{
     AdStructure, Advertisement, AttributeTable, Characteristic, CharacteristicProp, Runner,
@@ -25,6 +27,12 @@ use trouble_host::{
 const MAX_CONNECTIONS: usize = MAX_BTP_SESSIONS;
 const MAX_MTU_SIZE: usize = 512; // TODO const L2CAP_MTU: usize = 251;
 const MAX_ATTRIBUTES: usize = 10;
+const MAX_CHANNELS: usize = 2;
+const ADV_SETS: usize = 1;
+
+type GPHostResources<C> = HostResources<C, MAX_CONNECTIONS, MAX_CHANNELS, MAX_MTU_SIZE, ADV_SETS>;
+type GPGattServer<'a, 'v, C, M> = GattServer<'a, 'v, C, M, MAX_ATTRIBUTES, MAX_MTU_SIZE>;
+type GPAttributeTable<'a, M> = AttributeTable<'a, M, MAX_ATTRIBUTES>;
 
 // #[derive(Debug, Clone)]
 // struct Connection {
@@ -38,8 +46,8 @@ struct State<C>
 where
     C: Controller,
 {
-    resources: HostResources<C, MAX_CONNECTIONS, 2, MAX_MTU_SIZE, 1>,
-    c1_data: rs_matter::utils::storage::Vec<u8, C1_MAX_LEN>,
+    resources: GPHostResources<C>,
+    c1_data: Vec<u8, C1_MAX_LEN>,
 }
 
 impl<C> State<C>
@@ -49,16 +57,16 @@ where
     #[inline(always)]
     const fn new() -> Self {
         Self {
-            resources: HostResources::new(PacketQos::None),
-            c1_data: rs_matter::utils::storage::Vec::new(),
+            resources: GPHostResources::new(PacketQos::None),
+            c1_data: Vec::new(),
         }
     }
 
     fn init() -> impl Init<Self> {
         init!(Self {
             // TODO: Cannot efficiently in-place initialize because of the pesky PacketQos enum
-            resources: HostResources::new(PacketQos::None),
-            c1_data <- rs_matter::utils::storage::Vec::init(),
+            resources: GPHostResources::new(PacketQos::None),
+            c1_data <- Vec::init(),
         })
     }
 }
@@ -66,7 +74,7 @@ where
 #[derive(Debug)]
 struct IndBuffer {
     addr: BtAddr,
-    data: rs_matter::utils::storage::Vec<u8, MAX_MTU_SIZE>,
+    data: Vec<u8, MAX_MTU_SIZE>,
 }
 
 impl IndBuffer {
@@ -74,14 +82,14 @@ impl IndBuffer {
     const fn new() -> Self {
         Self {
             addr: BtAddr([0; 6]),
-            data: rs_matter::utils::storage::Vec::new(),
+            data: Vec::new(),
         }
     }
 
     fn init() -> impl Init<Self> {
         init!(Self {
             addr: BtAddr([0; 6]),
-            data <- rs_matter::utils::storage::Vec::init(),
+            data <- Vec::init(),
         })
     }
 }
@@ -162,8 +170,6 @@ where
     M: RawMutex,
     C: Controller + 'static,
 {
-    // app_id: u16,
-    // driver: BtDriver<'d, M>,
     context: &'a TroubleBtpGattContext<M, &'static C>,
     controller: C,
 }
@@ -200,11 +206,7 @@ where
         let mut state = self.context.state.lock().await;
 
         let resources = &mut state.resources;
-        let resources = unsafe {
-            core::mem::transmute::<_, &mut HostResources<&C, MAX_CONNECTIONS, 2, MAX_MTU_SIZE, 1>>(
-                resources,
-            )
-        };
+        let resources = unsafe { core::mem::transmute::<_, &mut GPHostResources<&C>>(resources) };
 
         let address = Address::random([0x41, 0x5A, 0xE3, 0x1E, 0x83, 0xE7]); // TODO
         info!("Our address = {:?}", address);
@@ -213,12 +215,14 @@ where
             .set_random_address(address)
             .build();
 
-        let mut table: AttributeTable<'_, M, MAX_ATTRIBUTES> = AttributeTable::new();
+        let mut table: GPAttributeTable<'_, M> = GPAttributeTable::new();
 
         // Generic Access Service (mandatory)
-        // TODO: Figure this out
-        let id = b"BT";
         let appearance = [0x80, 0x07];
+        let mut svc = table.add_service(Service::new(0x1800));
+        let _ = svc.add_characteristic_ro(0x2a00, service_name.as_bytes());
+        let _ = svc.add_characteristic_ro(0x2a01, &appearance[..]);
+        svc.build();
 
         // Generic attribute service (mandatory)
         table.add_service(Service::new(0x1801));
@@ -237,14 +241,14 @@ where
         let c2 = sb
             .add_characteristic(
                 Uuid::new_long(C2_CHARACTERISTIC_UUID.to_be_bytes()),
-                &[CharacteristicProp::Notify],
+                &[CharacteristicProp::Indicate],
                 &mut [],
             )
             .build();
 
         let _service = sb.build();
 
-        let server = GattServer::<&C, M, MAX_ATTRIBUTES, MAX_MTU_SIZE>::new(stack, &table);
+        let server = GPGattServer::<&C, M>::new(stack, &table);
 
         let mut server_task = pin!(self.run_gatt(&server, &table, c1, c2, &mut callback));
         let mut runner_task = pin!(self.run_ble(runner));
@@ -291,8 +295,8 @@ where
 
     async fn run_gatt<F>(
         &self,
-        server: &GattServer<'_, '_, &C, M, MAX_ATTRIBUTES, MAX_MTU_SIZE>,
-        table: &AttributeTable<'_, M, MAX_ATTRIBUTES>,
+        server: &GPGattServer<'_, '_, &C, M>,
+        table: &GPAttributeTable<'_, M>,
         c1: Characteristic,
         c2: Characteristic,
         mut callback: F,
@@ -342,7 +346,7 @@ where
 
     async fn run_ind(
         &self,
-        server: &GattServer<'_, '_, &C, M, MAX_ATTRIBUTES, MAX_MTU_SIZE>,
+        server: &GPGattServer<'_, '_, &C, M>,
         c2: Characteristic,
     ) -> BleHostError<C::Error> {
         loop {
