@@ -1,0 +1,73 @@
+[package]
+name = "rs-matter-embassy"
+version = "0.1.0"
+authors = ["ivmarkov <ivan.markov@gmail.com>"]
+edition = "2021"
+resolver = "2"
+categories = ["embedded", "hardware-support"]
+keywords = ["matter", "embedded", "embassy"]
+description = "Run rs-matter with embassy"
+repository = "https://github.com/ivmarkov/rs-matter-embassy"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+build = "build.rs"
+rust-version = "1.78"
+
+#[lib]
+#harness = false
+
+[patch.'https://github.com/ivmarkov/rs-matter-stack']
+rs-matter-stack = { path = "../rs-matter-stack" }
+
+[patch.crates-io]
+rs-matter = { git = "https://github.com/ivmarkov/rs-matter" }
+#rs-matter = { path = "../rs-matter/rs-matter" }
+#edge-nal = { git = "https://github.com/ivmarkov/edge-net" }
+#edge-nal = { path = "../edge-net/edge-nal" }
+#edge-nal-std = { git = "https://github.com/ivmarkov/edge-net" }
+#edge-nal-std = { path = "../edge-net/edge-nal-std" }
+bt-hci = { git = "https://github.com/ivmarkov/bt-hci", branch = "ref-impls" }
+#bt-hci = { path = "../bt-hci" }
+
+[profile.release]
+opt-level = "s"
+
+[profile.dev]
+debug = true
+opt-level = "z"
+
+[features]
+default = ["rs-matter-stack"]
+
+[dependencies]
+log = { version = "0.4", default-features = false }
+heapless = "0.8"
+enumset = { version = "1", default-features = false }
+embassy-futures = "0.1"
+embassy-sync = "0.6"
+embassy-time = "0.3"
+embassy-net = { version = "0.4", features = ["proto-ipv4", "proto-ipv6"] }
+#embedded-svc = { version = "0.28", default-features = false }
+rs-matter = { version = "0.1", default-features = false, features = ["rustcrypto"] }
+rs-matter-stack = { git = "https://github.com/ivmarkov/rs-matter-stack", default-features = false, optional = true }
+edge-nal = "0.3"
+edge-nal-embassy = "0.3"
+embedded-storage-async = "0.4.1"
+sequential-storage = "3"
+trouble-host = { version = "0.1", git = "https://github.com/ivmarkov/trouble", branch = "last-data" }
+#trouble-host = { version = "0.1", path = "../trouble/host" }
+scopeguard = "1"
+
+[dev-dependencies]
+embassy-time = { version = "0.3", features = ["generic-queue"] }
+static_cell = "2.1"
+
+# [[example]]
+# name = "light"
+# path = "examples/light.rs"
+# required-features = ["examples"]
+
+# [[example]]
+# name = "light_eth"
+# path = "examples/light_eth.rs"
+# required-features = ["examples"]
