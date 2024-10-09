@@ -8,10 +8,10 @@
 ## Overview
 
 Everything necessary to run [`rs-matter`](https://github.com/project-chip/rs-matter) with Embassy:
-* Implementation of `rs-matter`'s `GattPeripheral` for BLE comissioning support - based on [trouble]().
+* Implementation of `rs-matter`'s `GattPeripheral` for BLE comissioning support - based on [`trouble`](https://github.com/embassy-rs/trouble).
 * [`rs-matter-stack`](https://github.com/ivmarkov/rs-matter-stack) traits support:
   * `Netif` - Implementation based on [`embassy-net`]()
-  * `Ble` - Based on `trouble`, as mentioned
+  * `Ble` - Based on [`trouble`](https://github.com/embassy-rs/trouble), as mentioned
   * `Wireless` - TBD - custom implementations for each MCU
   * `KvBlobStore` - [`sequential-storage`]()
 
@@ -34,21 +34,4 @@ TBD
 
 ## All examples
 
-The examples could be built and flashed conveniently with [`cargo-espflash`](https://github.com/esp-rs/espflash/). To run e.g. `light` on an e.g. ESP32-C3:
-(Swap the Rust target and example name with the target corresponding for your ESP32 MCU and with the example you would like to build)
-
-with `cargo-espflash`:
-```sh
-$ MCU=esp32c3 cargo espflash flash --target riscv32imc-esp-espidf --example light --features examples --monitor
-```
-
-| MCU | "--target" |
-| --- | ------ |
-| esp32c2 | riscv32imc-esp-espidf |
-| esp32c3| riscv32imc-esp-espidf |
-| esp32c6| riscv32imac-esp-espidf |
-| esp32h2 | riscv32imac-esp-espidf |
-| esp32p4 | riscv32imafc-esp-espidf |
-| esp32 | xtensa-esp32-espidf |
-| esp32s2 | xtensa-esp32s2-espidf |
-| esp32s3 | xtensa-esp32s3-espidf |
+TBD
