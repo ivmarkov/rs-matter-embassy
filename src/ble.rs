@@ -322,7 +322,6 @@ where
                 handle,
                 offset,
                 len,
-                mtu,
             } = event
             {
                 if handle == c1 {
@@ -331,7 +330,7 @@ where
                             callback(GattPeripheralEvent::Write {
                                 address: to_bt_addr(&connection.peer_address()),
                                 data: &data[offset as usize..len as usize],
-                                gatt_mtu: Some(mtu),
+                                gatt_mtu: Some(connection.att_mtu()),
                             });
                         })
                         .unwrap(); // TODO
