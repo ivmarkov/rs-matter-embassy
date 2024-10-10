@@ -8,7 +8,7 @@ use log::{info, warn};
 use rs_matter::error::ErrorCode;
 use rs_matter::transport::network::btp::{
     AdvData, GattPeripheral, GattPeripheralEvent, C1_CHARACTERISTIC_UUID, C1_MAX_LEN,
-    C2_CHARACTERISTIC_UUID, MATTER_BLE_SERVICE_UUID16, MAX_BTP_SESSIONS,
+    C2_CHARACTERISTIC_UUID, C2_MAX_LEN, MATTER_BLE_SERVICE_UUID16, MAX_BTP_SESSIONS,
 };
 use rs_matter::transport::network::BtAddr;
 use rs_matter::utils::init::{init, Init};
@@ -26,7 +26,7 @@ use trouble_host::{
 
 const MAX_CONNECTIONS: usize = MAX_BTP_SESSIONS;
 const MAX_MTU_SIZE: usize = 512; // TODO const L2CAP_MTU: usize = 251;
-const MAX_ATTRIBUTES: usize = 10;
+const MAX_ATTRIBUTES: usize = 2;
 const MAX_CHANNELS: usize = 2;
 const ADV_SETS: usize = 1;
 
@@ -48,6 +48,7 @@ where
 {
     resources: GPHostResources<C>,
     c1_data: Vec<u8, C1_MAX_LEN>,
+    c2_data: Vec<u8, C2_MAX_LEN>,
 }
 
 impl<C> State<C>
@@ -59,6 +60,7 @@ where
         Self {
             resources: GPHostResources::new(PacketQos::None),
             c1_data: Vec::new(),
+            c2_data: Vec::new(),
         }
     }
 
@@ -67,6 +69,7 @@ where
             // TODO: Cannot efficiently in-place initialize because of the pesky PacketQos enum
             resources: GPHostResources::new(PacketQos::None),
             c1_data <- Vec::init(),
+            c2_data <- Vec::init(),
         })
     }
 }
@@ -215,17 +218,19 @@ where
             .set_random_address(address)
             .build();
 
+        // Ideally, this should be in the context, but due to the mutable borrows, that's not possible
         let mut table: GPAttributeTable<'_, M> = GPAttributeTable::new();
 
         // Generic Access Service (mandatory)
-        let appearance = [0x80, 0x07];
         let mut svc = table.add_service(Service::new(0x1800));
         let _ = svc.add_characteristic_ro(0x2a00, service_name.as_bytes());
-        let _ = svc.add_characteristic_ro(0x2a01, &appearance[..]);
+        let _ = svc.add_characteristic_ro(0x2a01, &[0x80, 0x07]);
         svc.build();
 
         // Generic attribute service (mandatory)
         table.add_service(Service::new(0x1801));
+
+        let state = &mut *state;
 
         // Matter service
         let mut sb = table.add_service(Service::new(MATTER_BLE_SERVICE_UUID16));
@@ -242,7 +247,7 @@ where
             .add_characteristic(
                 Uuid::new_long(C2_CHARACTERISTIC_UUID.to_be_bytes()),
                 &[CharacteristicProp::Indicate],
-                &mut [],
+                &mut state.c2_data,
             )
             .build();
 
@@ -304,6 +309,11 @@ where
     where
         F: FnMut(GattPeripheralEvent) + Send,
     {
+        fn to_bt_addr(addr: &BdAddr) -> BtAddr {
+            let raw = addr.raw();
+            BtAddr([raw[0], raw[1], raw[2], raw[3], raw[4], raw[5]])
+        }
+
         loop {
             let event = server.next().await.unwrap();
 
@@ -374,40 +384,40 @@ where
         &self,
         mut peripheral: Peripheral<'_, &C>,
         service_name: &str,
-        service_adv_data: &AdvData, // TODO
+        service_adv_data: &AdvData,
     ) -> Result<(), BleHostError<C::Error>> {
-        let mut adv_data = [0; 31];
+        let adv_srv_enc_data = service_adv_data
+            .service_payload_iter()
+            .collect::<Vec<_, 8>>();
+        let adv_data = [
+            AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
+            AdStructure::ServiceData16 {
+                uuid: MATTER_BLE_SERVICE_UUID16,
+                data: &adv_srv_enc_data,
+            },
+            AdStructure::CompleteLocalName(service_name.as_bytes()),
+        ];
 
-        AdStructure::encode_slice(
-            &[
-                AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
-                AdStructure::ServiceUuids16(&[Uuid::Uuid16([0x0f, 0x18])]),
-                AdStructure::CompleteLocalName(service_name.as_bytes()),
-            ],
-            &mut adv_data[..],
-        )?;
+        let mut adv_enc_data = [0; 31];
+
+        let len = AdStructure::encode_slice(&adv_data, &mut adv_enc_data)?;
 
         loop {
-            info!("[adv] advertising");
+            info!("Advertising");
             let mut advertiser = peripheral
                 .advertise(
                     &Default::default(),
                     Advertisement::ConnectableScannableUndirected {
-                        adv_data: &adv_data[..],
+                        adv_data: &adv_enc_data[..len],
                         scan_data: &[],
                     },
                 )
                 .await?;
 
             let _conn = advertiser.accept().await?;
-            info!("[adv] connection established");
+            info!("Connection established");
         }
     }
-}
-
-fn to_bt_addr(addr: &BdAddr) -> BtAddr {
-    let raw = addr.raw();
-    BtAddr([raw[0], raw[1], raw[2], raw[3], raw[4], raw[5]])
 }
 
 impl<'a, M, C> GattPeripheral for TroubleBtpGattPeripheral<'a, M, C>
