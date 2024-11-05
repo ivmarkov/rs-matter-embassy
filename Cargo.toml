@@ -13,8 +13,8 @@ readme = "README.md"
 build = "build.rs"
 rust-version = "1.78"
 
-#[lib]
-#harness = false
+[lib]
+harness = false
 
 #[patch.'https://github.com/ivmarkov/rs-matter-stack']
 #rs-matter-stack = { path = "../rs-matter-stack" }
@@ -26,7 +26,7 @@ rs-matter = { git = "https://github.com/ivmarkov/rs-matter" }
 #edge-nal = { path = "../edge-net/edge-nal" }
 #edge-nal-std = { git = "https://github.com/ivmarkov/edge-net" }
 #edge-nal-std = { path = "../edge-net/edge-nal-std" }
-bt-hci = { git = "https://github.com/ivmarkov/bt-hci", branch = "ref-impls" }
+#bt-hci = { git = "https://github.com/ivmarkov/bt-hci", branch = "ref-impls" }
 #bt-hci = { path = "../bt-hci" }
 
 [profile.release]
@@ -54,9 +54,12 @@ edge-nal = "0.3"
 edge-nal-embassy = "0.3"
 embedded-storage-async = "0.4.1"
 sequential-storage = "3"
-trouble-host = { version = "0.1", git = "https://github.com/ivmarkov/trouble", branch = "last-data" }
+trouble-host = { version = "0.1", git = "https://github.com/ivmarkov/trouble", branch = "last-data2" }
+bt-hci = { version = "0.1", default-features = false }
 #trouble-host = { version = "0.1", path = "../trouble/host" }
-scopeguard = "1"
+scopeguard = { version = "1", default-features = false }
+esp-hal = { version = "0.21", features = ["esp32"] }
+esp-wifi = { version = "0.10", features = ["esp32", "async", "embassy-net", "ble", "wifi"] }
 
 [dev-dependencies]
 embassy-time = { version = "0.3", features = ["generic-queue"] }

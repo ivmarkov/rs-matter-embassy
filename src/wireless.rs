@@ -1,9 +1,4 @@
-use esp_idf_svc::bt::{self, BtDriver};
-use esp_idf_svc::hal::into_ref;
-use esp_idf_svc::hal::modem::BluetoothModemPeripheral;
-use esp_idf_svc::hal::peripheral::{Peripheral, PeripheralRef};
-use esp_idf_svc::hal::task::embassy_sync::EspRawMutex;
-use esp_idf_svc::nvs::EspDefaultNvsPartition;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 
 use rs_matter::error::Error;
 use rs_matter::tlv::{FromTLV, ToTLV};
@@ -14,24 +9,21 @@ use rs_matter_stack::persist::KvBlobBuf;
 use rs_matter_stack::wireless::traits::{Ble, WirelessConfig, WirelessData};
 use rs_matter_stack::{MatterStack, WirelessBle};
 
-use crate::ble::{EspBtpGattContext, EspBtpGattPeripheral};
+use crate::ble::{TroubleBtpGattPeripheral, TroubleBtpGattContext};
 
-#[cfg(all(
-    esp_idf_comp_openthread_enabled,
-    esp_idf_openthread_enabled,
-    esp_idf_comp_vfs_enabled,
-))]
-pub use thread::*;
+pub mod esp;
 
-#[cfg(esp_idf_comp_esp_wifi_enabled)]
-pub use wifi::*;
+//pub mod wifi;
+
+// #[cfg(esp_idf_comp_esp_wifi_enabled)]
+// pub use wifi::*;
 
 /// A type alias for an ESP-IDF Matter stack running over a wireless network (Wifi or Thread) and BLE.
-pub type EspWirelessMatterStack<'a, T, E> = MatterStack<'a, EspWirelessBle<T, E>>;
+pub type EmbassyWirelessMatterStack<'a, T, C, E> = MatterStack<'a, EmbassyWirelessBle<T, C, E>>;
 
 /// A type alias for an ESP-IDF implementation of the `Network` trait for a Matter stack running over
 /// BLE during commissioning, and then over either WiFi or Thread when operating.
-pub type EspWirelessBle<T, E> = WirelessBle<EspRawMutex, T, KvBlobBuf<EspGatt<E>>>;
+pub type EmbassyWirelessBle<T, C, E> = WirelessBle<CriticalSectionRawMutex, T, KvBlobBuf<EmbassyGatt<C, E>>>;
 
 /// An embedding of the ESP IDF Bluedroid Gatt peripheral context for the `WirelessBle` network type from `rs-matter-stack`.
 ///
@@ -39,17 +31,21 @@ pub type EspWirelessBle<T, E> = WirelessBle<EspRawMutex, T, KvBlobBuf<EspGatt<E>
 ///
 /// Usage:
 /// ```no_run
-/// MatterStack<WirelessBle<EspRawMutex, Wifi, KvBlobBuf<EspGatt<E>>>>::new(...);
+/// MatterStack<WirelessBle<CriticalSectionRawMutex, Wifi, KvBlobBuf<EmbassyGatt<C, E>>>>::new(...);
 /// ```
 ///
 /// ... where `E` can be a next-level, user-supplied embedding or just `()` if the user does not need to embed anything.
-pub struct EspGatt<E = ()> {
-    btp_gatt_context: EspBtpGattContext,
+pub struct EmbassyGatt<C, E = ()> 
+where 
+    C: trouble_host::Controller,
+{
+    btp_gatt_context: TroubleBtpGattContext<CriticalSectionRawMutex, C>,
     embedding: E,
 }
 
-impl<E> EspGatt<E>
+impl<C, E> EmbassyGatt<C, E>
 where
+    C: trouble_host::Controller,
     E: Embedding,
 {
     /// Creates a new instance of the `EspGatt` embedding.
@@ -57,7 +53,7 @@ where
     #[inline(always)]
     const fn new() -> Self {
         Self {
-            btp_gatt_context: EspBtpGattContext::new(),
+            btp_gatt_context: TroubleBtpGattContext::new(),
             embedding: E::INIT,
         }
     }
@@ -65,13 +61,13 @@ where
     /// Return an in-place initializer for the `EspGatt` embedding.
     fn init() -> impl Init<Self> {
         init!(Self {
-            btp_gatt_context <- EspBtpGattContext::init(),
+            btp_gatt_context <- TroubleBtpGattContext::init(),
             embedding <- E::init(),
         })
     }
 
     /// Return a reference to the Bluedroid Gatt peripheral context.
-    pub fn context(&self) -> &EspBtpGattContext {
+    pub fn context(&self) -> &TroubleBtpGattContext<CriticalSectionRawMutex, C> {
         &self.btp_gatt_context
     }
 
@@ -81,43 +77,47 @@ where
     }
 }
 
-impl<E> Embedding for EspGatt<E>
-where
+impl<C, E> Embedding for EmbassyGatt<C, E>
+where 
+    C: trouble_host::Controller,
     E: Embedding,
 {
     const INIT: Self = Self::new();
 
     fn init() -> impl Init<Self> {
-        EspGatt::init()
+        EmbassyGatt::init()
     }
 }
 
 const GATTS_APP_ID: u16 = 0;
 
 /// A `Ble` trait implementation via ESP-IDF
-pub struct EspMatterBle<'a, 'd, T> {
-    context: &'a EspBtpGattContext,
-    modem: PeripheralRef<'d, T>,
+pub struct EmbassyMatterBle<'a, 'd, C> 
+where 
+    C: trouble_host::Controller,
+{
+    context: &'a TroubleBtpGattContext<CriticalSectionRawMutex, C>,
+    controller: C,
     nvs: EspDefaultNvsPartition,
 }
 
-impl<'a, 'd, T> EspMatterBle<'a, 'd, T>
-where
-    T: BluetoothModemPeripheral,
+impl<'a, 'd, C> EmbassyMatterBle<'a, 'd, C>
+where 
+    C: trouble_host::Controller,
 {
     /// Create a new instance of the `EspBle` type.
-    pub fn new<C, E>(
-        modem: impl Peripheral<P = T> + 'd,
+    pub fn new<T, E>(
+        controller: C,
         nvs: EspDefaultNvsPartition,
-        stack: &'a EspWirelessMatterStack<C, E>,
+        stack: &'a EmbassyWirelessMatterStack<T, C, E>,
     ) -> Self
     where
-        C: WirelessConfig,
-        <C::Data as WirelessData>::NetworkCredentials: Clone + for<'t> FromTLV<'t> + ToTLV,
+        T: WirelessConfig,
+        <T::Data as WirelessData>::NetworkCredentials: Clone + for<'t> FromTLV<'t> + ToTLV,
         E: Embedding + 'static,
     {
         Self::wrap(
-            modem,
+            controller,
             nvs,
             stack.network().embedding().embedding().context(),
         )
@@ -125,21 +125,21 @@ where
 
     /// Wrap an existing `EspBtpGattContext` and `BluetoothModemPeripheral` into a new instance of the `EspBle` type.
     pub fn wrap(
-        modem: impl Peripheral<P = T> + 'd,
+        controller: C,
         nvs: EspDefaultNvsPartition,
         context: &'a EspBtpGattContext,
     ) -> Self {
         into_ref!(modem);
 
         Self {
+            controller, 
             context,
-            modem,
             nvs,
         }
     }
 }
 
-impl<'a, 'd, T> Ble for EspMatterBle<'a, 'd, T>
+impl<'a, 'd, T> Ble for EmbassyMatterBle<'a, 'd, T>
 where
     T: BluetoothModemPeripheral,
 {
@@ -155,30 +155,6 @@ where
 
         Ok(peripheral)
     }
-}
-
-#[cfg(all(
-    esp_idf_comp_openthread_enabled,
-    esp_idf_openthread_enabled,
-    esp_idf_comp_vfs_enabled,
-))]
-mod thread {
-    use rs_matter_stack::wireless::traits::{Thread, NC};
-
-    use super::EspWirelessMatterStack;
-
-    /// A type alias for an ESP-IDF Matter stack running over Thread (and BLE, during commissioning).
-    pub type EspThreadMatterStack<'a, E> = EspWirelessMatterStack<'a, Thread, E>;
-
-    /// A type alias for an ESP-IDF Matter stack running over Thread (and BLE, during commissioning).
-    ///
-    /// Unlike `EspThreadMatterStack`, this type alias runs the commissioning in a non-concurrent mode,
-    /// where the device runs either BLE or Thread, but not both at the same time.
-    ///
-    /// This is useful to save memory by only having one of the stacks active at any point in time.
-    ///
-    /// Note that Alexa does not (yet) work with non-concurrent commissioning.
-    pub type EspThreadNCMatterStack<'a, E> = EspWirelessMatterStack<'a, Thread<NC>, E>;
 }
 
 #[cfg(esp_idf_comp_esp_wifi_enabled)]
@@ -220,7 +196,7 @@ mod wifi {
     use super::EspWirelessMatterStack;
 
     /// A type alias for an ESP-IDF Matter stack running over Wifi (and BLE, during commissioning).
-    pub type EspWifiMatterStack<'a, E> = EspWirelessMatterStack<'a, Wifi, E>;
+    pub type EspWifiMatterStack<'a, E> = EmbassyWirelessMatterStack<'a, Wifi, E>;
 
     /// A type alias for an ESP-IDF Matter stack running over Wifi (and BLE, during commissioning).
     ///
@@ -230,7 +206,7 @@ mod wifi {
     /// This is useful to save memory by only having one of the stacks active at any point in time.
     ///
     /// Note that Alexa does not (yet) work with non-concurrent commissioning.
-    pub type EspWifiNCMatterStack<'a, E> = EspWirelessMatterStack<'a, Wifi<NC>, E>;
+    pub type EspWifiNCMatterStack<'a, E> = EmbassyWirelessMatterStack<'a, Wifi<NC>, E>;
 
     /// The relation between a network interface and a controller is slightly different
     /// in the ESP-IDF crates compared to what `rs-matter-stack` wants, hence we need this helper type.

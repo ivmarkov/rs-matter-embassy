@@ -173,8 +173,7 @@ where
     M: RawMutex,
     C: Controller + 'static,
 {
-    context: &'a TroubleBtpGattContext<M, &'static C>,
-    controller: C,
+    context: &'a TroubleBtpGattContext<M, C>,
 }
 
 impl<'a, M, C> TroubleBtpGattPeripheral<'a, M, C>
@@ -186,7 +185,7 @@ where
     ///
     /// Creation might fail if the GATT context cannot be reset, so user should ensure
     /// that there are no other GATT peripherals running before calling this function.
-    pub fn new(controller: C, context: &'a TroubleBtpGattContext<M, &'static C>) -> Result<Self, ()>
+    pub fn new(controller: C, context: &'a TroubleBtpGattContext<M, C>) -> Result<Self, ()>
     where
         C: Controller,
     {
