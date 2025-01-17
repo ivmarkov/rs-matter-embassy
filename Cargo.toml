@@ -22,10 +22,6 @@ harness = false
 [patch.crates-io]
 rs-matter = { git = "https://github.com/ivmarkov/rs-matter" }
 #rs-matter = { path = "../rs-matter/rs-matter" }
-#edge-nal = { git = "https://github.com/ivmarkov/edge-net" }
-#edge-nal = { path = "../edge-net/edge-nal" }
-#edge-nal-std = { git = "https://github.com/ivmarkov/edge-net" }
-#edge-nal-std = { path = "../edge-net/edge-nal-std" }
 #bt-hci = { git = "https://github.com/ivmarkov/bt-hci", branch = "ref-impls" }
 #bt-hci = { path = "../bt-hci" }
 
@@ -45,24 +41,27 @@ heapless = "0.8"
 enumset = { version = "1", default-features = false }
 embassy-futures = "0.1"
 embassy-sync = "0.6"
-embassy-time = "0.3"
-embassy-net = { version = "0.4", features = ["proto-ipv4", "proto-ipv6"] }
+embassy-time = "0.4"
+embassy-net = { version = "0.6", features = ["proto-ipv4", "proto-ipv6"] }
 #embedded-svc = { version = "0.28", default-features = false }
 rs-matter = { version = "0.1", default-features = false, features = ["rustcrypto"] }
 rs-matter-stack = { git = "https://github.com/ivmarkov/rs-matter-stack", default-features = false, optional = true }
-edge-nal = "0.3"
-edge-nal-embassy = "0.3"
+edge-nal = "0.5"
+edge-nal-embassy = "0.5"
 embedded-storage-async = "0.4.1"
 sequential-storage = "3"
-trouble-host = { version = "0.1", git = "https://github.com/ivmarkov/trouble", branch = "last-data2" }
+#trouble-host = { version = "0.1", git = "https://github.com/ivmarkov/trouble", branch = "last-data2" }
+#trouble-host = { version = "0.1", git = "https://github.com/embassy-rs/trouble" }
+#trouble-host = { version = "0.1", git = "https://github.com/ivmarkov/trouble" }
+trouble-host = { version = "0.1", path = "../trouble/host" }
 bt-hci = { version = "0.1", default-features = false }
-#trouble-host = { version = "0.1", path = "../trouble/host" }
 scopeguard = { version = "1", default-features = false }
-esp-hal = { version = "0.21", features = ["esp32"] }
-esp-wifi = { version = "0.10", features = ["esp32", "async", "embassy-net", "ble", "wifi"] }
+esp-hal = { version = "0.23", features = ["esp32"] }
+esp-wifi = { version = "0.12", features = ["esp32", "ble", "wifi"] }
+static_cell = "2"
 
 [dev-dependencies]
-embassy-time = { version = "0.3", features = ["generic-queue"] }
+embassy-time-queue-utils = { version = "0.1", features = ["generic-queue-64"] }
 static_cell = "2.1"
 
 # [[example]]

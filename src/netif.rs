@@ -2,12 +2,10 @@ use edge_nal::UdpBind;
 use edge_nal_embassy::{Udp, UdpBuffers, UdpError};
 
 use embassy_futures::select::select;
-use embassy_net::driver::Driver;
 use embassy_net::Stack;
 use embassy_time::{Duration, Timer};
 
 use rs_matter::error::Error;
-
 use rs_matter_stack::netif::{Netif, NetifConf};
 
 use crate::error::to_net_error;
@@ -16,27 +14,17 @@ const TIMEOUT_PERIOD_SECS: u8 = 5;
 
 /// A `Netif` and `UdpBind` traits implementation for Embassy
 /// (`embassy-net` in particular)
-pub struct EmbassyNetif<
-    'd,
-    D,
-    const N: usize,
-    const TX_SZ: usize,
-    const RX_SZ: usize,
-    const M: usize,
-> where
-    D: Driver,
+pub struct EmbassyNetif<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize>
 {
-    stack: &'d Stack<D>,
-    udp: Udp<'d, D, N, TX_SZ, RX_SZ, M>,
+    stack: Stack<'d>,
+    udp: Udp<'d, N, TX_SZ, RX_SZ, M>,
 }
 
-impl<'d, D, const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize>
-    EmbassyNetif<'d, D, N, TX_SZ, RX_SZ, M>
-where
-    D: Driver,
+impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize>
+    EmbassyNetif<'d, N, TX_SZ, RX_SZ, M>
 {
     /// Create a new `EmbassyNetif` instance
-    pub fn new(stack: &'d Stack<D>, buffers: &'d UdpBuffers<N, TX_SZ, RX_SZ, M>) -> Self {
+    pub fn new(stack: Stack<'d>, buffers: &'d UdpBuffers<N, TX_SZ, RX_SZ, M>) -> Self {
         Self {
             stack,
             udp: Udp::new(stack, buffers),
@@ -53,8 +41,8 @@ where
         };
 
         let conf = NetifConf {
-            ipv4: v4.address.address().0.into(),
-            ipv6: v6.address.address().0.into(),
+            ipv4: v4.address.address(),
+            ipv6: v6.address.address(),
             interface: 0,
             mac: [0; 6], // TODO
         };
@@ -75,10 +63,8 @@ where
     }
 }
 
-impl<'d, D, const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize> Netif
-    for EmbassyNetif<'d, D, N, TX_SZ, RX_SZ, M>
-where
-    D: Driver,
+impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize> Netif
+    for EmbassyNetif<'_, N, TX_SZ, RX_SZ, M>
 {
     async fn get_conf(&self) -> Result<Option<NetifConf>, Error> {
         Ok(EmbassyNetif::get_conf(self).ok())
@@ -93,15 +79,13 @@ where
     }
 }
 
-impl<'d, D, const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize> UdpBind
-    for EmbassyNetif<'d, D, N, TX_SZ, RX_SZ, M>
-where
-    D: Driver,
+impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize> UdpBind
+    for EmbassyNetif<'_, N, TX_SZ, RX_SZ, M>
 {
     type Error = UdpError;
 
     type Socket<'b>
-        = edge_nal_embassy::UdpSocket<'b, D, N, TX_SZ, RX_SZ, M>
+        = edge_nal_embassy::UdpSocket<'b, N, TX_SZ, RX_SZ, M>
     where
         Self: 'b;
 
