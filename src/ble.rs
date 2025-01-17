@@ -11,10 +11,8 @@ use rs_matter::transport::network::btp::{
     MATTER_BLE_SERVICE_UUID16, MAX_BTP_SESSIONS,
 };
 use rs_matter::transport::network::BtAddr;
-use rs_matter::utils::cell::RefCell;
 use rs_matter::utils::init::{init, Init};
 use rs_matter::utils::storage::Vec;
-use rs_matter::utils::sync::blocking::Mutex;
 use rs_matter::utils::sync::{IfMutex, Signal};
 
 use trouble_host::att::{AttReq, AttRsp};
@@ -31,6 +29,23 @@ const ADV_SETS: usize = 1;
 type GPHostResources<C> = HostResources<C, MAX_CONNECTIONS, MAX_CHANNELS, MAX_MTU_SIZE, ADV_SETS>;
 
 type External = [u8; 0];
+
+pub trait ControllerFactory {
+    type Controller: Controller;
+
+    async fn create(&self) -> Self::Controller;
+}
+
+impl<T> ControllerFactory for &T
+where
+    T: ControllerFactory,
+{
+    type Controller = T::Controller;
+
+    async fn create(&self) -> Self::Controller {
+        (*self).create().await
+    }
+}
 
 // GATT Server definition
 #[gatt_server]
@@ -144,29 +159,26 @@ where
 pub struct TroubleBtpGattPeripheral<'a, M, C>
 where
     M: RawMutex,
-    C: Controller,
+    C: ControllerFactory,
 {
-    controller: Mutex<M, RefCell<Option<C>>>,
-    context: &'a TroubleBtpGattContext<M, C>,
+    factory: C,
+    context: &'a TroubleBtpGattContext<M, C::Controller>,
 }
 
 impl<'a, M, C> TroubleBtpGattPeripheral<'a, M, C>
 where
     M: RawMutex,
-    C: Controller,
+    C: ControllerFactory,
 {
     /// Create a new instance.
     ///
     /// Creation might fail if the GATT context cannot be reset, so user should ensure
     /// that there are no other GATT peripherals running before calling this function.
-    pub fn new(controller: C, context: &'a TroubleBtpGattContext<M, C>) -> Result<Self, ()>
+    pub fn new(factory: C, context: &'a TroubleBtpGattContext<M, C::Controller>) -> Result<Self, ()>
     where
-        C: Controller,
+        C: ControllerFactory,
     {
-        Ok(Self {
-            controller: Mutex::new(RefCell::new(Some(controller))),
-            context,
-        })
+        Ok(Self { factory, context })
     }
 
     /// Run the GATT peripheral.
@@ -181,7 +193,7 @@ where
     {
         let mut resources = self.context.resources.lock().await;
 
-        let controller = self.controller.lock(|c| c.take().unwrap()); // TODO XXX FIXME
+        let controller = self.factory.create().await; // TODO
 
         let builder = trouble_host::new(controller, &mut resources);
 
@@ -222,7 +234,7 @@ where
         Ok(())
     }
 
-    async fn run_ble(mut runner: Runner<'_, C>) {
+    async fn run_ble(mut runner: Runner<'_, C::Controller>) {
         loop {
             if let Err(e) = runner.run().await {
                 #[cfg(feature = "defmt")]
@@ -332,8 +344,11 @@ where
     async fn advertise<'p>(
         service_name: &str,
         service_adv_data: &AdvData,
-        peripheral: &mut Peripheral<'p, C>,
-    ) -> Result<Connection<'p>, BleHostError<C::Error>> {
+        peripheral: &mut Peripheral<'p, C::Controller>,
+    ) -> Result<
+        Connection<'p>,
+        BleHostError<<<C as ControllerFactory>::Controller as embedded_io::ErrorType>::Error>,
+    > {
         let service_adv_enc_data = service_adv_data
             .service_payload_iter()
             .collect::<Vec<_, 8>>();
@@ -370,7 +385,10 @@ where
         &self,
         data: &[u8],
         address: BtAddr,
-    ) -> Result<(), BleHostError<C::Error>> {
+    ) -> Result<
+        (),
+        BleHostError<<<C as ControllerFactory>::Controller as embedded_io::ErrorType>::Error>,
+    > {
         self.context
             .ind
             .with(|ind| {
@@ -392,7 +410,7 @@ where
 impl<M, C> GattPeripheral for TroubleBtpGattPeripheral<'_, M, C>
 where
     M: RawMutex,
-    C: Controller,
+    C: ControllerFactory,
 {
     async fn run<F>(
         &self,

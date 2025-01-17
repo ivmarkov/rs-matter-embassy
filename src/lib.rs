@@ -19,5 +19,5 @@ pub mod eth;
 pub mod netif;
 #[cfg(feature = "rs-matter-stack")]
 pub mod persist;
-//#[cfg(feature = "rs-matter-stack")]
-//pub mod wireless;
+#[cfg(feature = "rs-matter-stack")]
+pub mod wireless;

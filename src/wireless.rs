@@ -9,9 +9,7 @@ use rs_matter_stack::persist::KvBlobBuf;
 use rs_matter_stack::wireless::traits::{Ble, WirelessConfig, WirelessData};
 use rs_matter_stack::{MatterStack, WirelessBle};
 
-use crate::ble::{TroubleBtpGattPeripheral, TroubleBtpGattContext};
-
-pub mod esp;
+use crate::ble::{ControllerFactory, TroubleBtpGattContext, TroubleBtpGattPeripheral};
 
 //pub mod wifi;
 
@@ -23,7 +21,8 @@ pub type EmbassyWirelessMatterStack<'a, T, C, E> = MatterStack<'a, EmbassyWirele
 
 /// A type alias for an ESP-IDF implementation of the `Network` trait for a Matter stack running over
 /// BLE during commissioning, and then over either WiFi or Thread when operating.
-pub type EmbassyWirelessBle<T, C, E> = WirelessBle<CriticalSectionRawMutex, T, KvBlobBuf<EmbassyGatt<C, E>>>;
+pub type EmbassyWirelessBle<T, C, E> =
+    WirelessBle<CriticalSectionRawMutex, T, KvBlobBuf<EmbassyGatt<C, E>>>;
 
 /// An embedding of the ESP IDF Bluedroid Gatt peripheral context for the `WirelessBle` network type from `rs-matter-stack`.
 ///
@@ -35,8 +34,8 @@ pub type EmbassyWirelessBle<T, C, E> = WirelessBle<CriticalSectionRawMutex, T, K
 /// ```
 ///
 /// ... where `E` can be a next-level, user-supplied embedding or just `()` if the user does not need to embed anything.
-pub struct EmbassyGatt<C, E = ()> 
-where 
+pub struct EmbassyGatt<C, E = ()>
+where
     C: trouble_host::Controller,
 {
     btp_gatt_context: TroubleBtpGattContext<CriticalSectionRawMutex, C>,
@@ -78,7 +77,7 @@ where
 }
 
 impl<C, E> Embedding for EmbassyGatt<C, E>
-where 
+where
     C: trouble_host::Controller,
     E: Embedding,
 {
@@ -89,27 +88,25 @@ where
     }
 }
 
-const GATTS_APP_ID: u16 = 0;
-
 /// A `Ble` trait implementation via ESP-IDF
-pub struct EmbassyMatterBle<'a, 'd, C> 
-where 
-    C: trouble_host::Controller,
+pub struct EmbassyMatterBle<'a, C>
+where
+    C: ControllerFactory,
 {
-    context: &'a TroubleBtpGattContext<CriticalSectionRawMutex, C>,
-    controller: C,
-    nvs: EspDefaultNvsPartition,
+    factory: C,
+    context: &'a TroubleBtpGattContext<CriticalSectionRawMutex, C::Controller>,
+    //nvs: EspDefaultNvsPartition,
 }
 
-impl<'a, 'd, C> EmbassyMatterBle<'a, 'd, C>
-where 
-    C: trouble_host::Controller,
+impl<'a, C> EmbassyMatterBle<'a, C>
+where
+    C: ControllerFactory + 'static,
 {
     /// Create a new instance of the `EspBle` type.
     pub fn new<T, E>(
-        controller: C,
-        nvs: EspDefaultNvsPartition,
-        stack: &'a EmbassyWirelessMatterStack<T, C, E>,
+        factory: C,
+        //nvs: EspDefaultNvsPartition,
+        stack: &'a EmbassyWirelessMatterStack<T, C::Controller, E>,
     ) -> Self
     where
         T: WirelessConfig,
@@ -117,41 +114,39 @@ where
         E: Embedding + 'static,
     {
         Self::wrap(
-            controller,
-            nvs,
+            factory,
+            //nvs,
             stack.network().embedding().embedding().context(),
         )
     }
 
     /// Wrap an existing `EspBtpGattContext` and `BluetoothModemPeripheral` into a new instance of the `EspBle` type.
     pub fn wrap(
-        controller: C,
-        nvs: EspDefaultNvsPartition,
-        context: &'a EspBtpGattContext,
+        factory: C,
+        //nvs: EspDefaultNvsPartition,
+        context: &'a TroubleBtpGattContext<CriticalSectionRawMutex, C::Controller>,
     ) -> Self {
-        into_ref!(modem);
+        //into_ref!(modem);
 
         Self {
-            controller, 
+            factory,
             context,
-            nvs,
+            //nvs,
         }
     }
 }
 
-impl<'a, 'd, T> Ble for EmbassyMatterBle<'a, 'd, T>
+impl<'a, C> Ble for EmbassyMatterBle<'a, C>
 where
-    T: BluetoothModemPeripheral,
+    C: ControllerFactory,
 {
     type Peripheral<'t>
-        = EspBtpGattPeripheral<'a, 't, bt::Ble>
+        = TroubleBtpGattPeripheral<'a, CriticalSectionRawMutex, &'t C>
     where
         Self: 't;
 
     async fn start(&mut self) -> Result<Self::Peripheral<'_>, Error> {
-        let bt = BtDriver::new(&mut self.modem, Some(self.nvs.clone())).unwrap();
-
-        let peripheral = EspBtpGattPeripheral::new(GATTS_APP_ID, bt, self.context).unwrap();
+        let peripheral = TroubleBtpGattPeripheral::new(&self.factory, self.context).unwrap();
 
         Ok(peripheral)
     }
