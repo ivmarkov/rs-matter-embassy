@@ -4,105 +4,137 @@
 //! and thus BLE for commissioning.
 //!
 //! If you want to use Ethernet, utilize `EspEthMatterStack` instead.
-//! If you want to use non-concurrent commissioning, utilize `EspWifiNCMatterStack` instead
+//! If you want to use non-concurrent commissioning, utilize `EmbassyWifiNCMatterStack` instead
 //! (Alexa does not work (yet) with non-concurrent commissioning).
 //!
 //! The example implements a fictitious Light device (an On-Off Matter cluster).
+#![no_std]
+#![no_main]
 
+use core::cell::RefCell;
 use core::pin::pin;
 
+use bt_hci::controller::ExternalController;
+
+use embassy_executor::Spawner;
 use embassy_futures::select::select;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::{Duration, Timer};
 
-use esp_idf_matter::{init_async_io, EspMatterBle, EspMatterWifi, EspWifiNCMatterStack};
+use esp_hal::rng::Rng;
+use esp_hal::{clock::CpuClock, timer::timg::TimerGroup};
 
-use esp_idf_svc::eventloop::EspSystemEventLoop;
-use esp_idf_svc::hal::peripherals::Peripherals;
-use esp_idf_svc::hal::task::block_on;
-use esp_idf_svc::log::EspLogger;
-use esp_idf_svc::nvs::EspDefaultNvsPartition;
-use esp_idf_svc::timer::EspTaskTimerService;
+use esp_wifi::ble::controller::BleConnector;
+use esp_wifi::wifi::{WifiDevice, WifiStaDevice};
+use esp_wifi::EspWifiController;
 
-use log::{error, info};
+use log::info;
 
-use rs_matter::data_model::cluster_basic_information::BasicInfoConfig;
-use rs_matter::data_model::cluster_on_off;
-use rs_matter::data_model::device_types::DEV_TYPE_ON_OFF_LIGHT;
-use rs_matter::data_model::objects::{Dataver, Endpoint, HandlerCompat, Node};
-use rs_matter::data_model::system_model::descriptor;
-use rs_matter::utils::init::InitMaybeUninit;
-use rs_matter::utils::select::Coalesce;
+use rs_matter_embassy::ble::{GPHostResources, TroubleBtpGattPeripheral, QOS};
+use rs_matter_embassy::matter::data_model::cluster_basic_information::BasicInfoConfig;
+use rs_matter_embassy::matter::data_model::cluster_on_off;
+use rs_matter_embassy::matter::data_model::device_types::DEV_TYPE_ON_OFF_LIGHT;
+use rs_matter_embassy::matter::data_model::objects::{Dataver, Endpoint, HandlerCompat, Node};
+use rs_matter_embassy::matter::data_model::system_model::descriptor;
+use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
+use rs_matter_embassy::matter::utils::select::Coalesce;
+use rs_matter_embassy::matter::utils::sync::blocking::Mutex;
+use rs_matter_embassy::stack::network::Network;
+use rs_matter_embassy::stack::persist::DummyPersist;
+use rs_matter_embassy::stack::test_device::{
+    TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
+};
+use rs_matter_embassy::stack::wireless::traits::PreexistingBle;
+use rs_matter_embassy::stack::MdnsType;
+use rs_matter_embassy::wireless::{EmbassyWifi, EmbassyWifiMatterStack};
 
-use rs_matter::BasicCommData;
-use rs_matter_stack::persist::DummyPersist;
+macro_rules! mk_static {
+    ($t:ty) => {{
+        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
+        #[deny(unused_attributes)]
+        let x = STATIC_CELL.uninit();
+        x
+    }};
+    ($t:ty,$val:expr) => {{
+        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
+        #[deny(unused_attributes)]
+        let x = STATIC_CELL.uninit().write(($val));
+        x
+    }};
+}
 
-use static_cell::StaticCell;
-
-fn main() -> Result<(), anyhow::Error> {
-    EspLogger::initialize_default();
+#[esp_hal_embassy::main]
+async fn main(_s: Spawner) {
+    esp_println::logger::init_logger_from_env();
 
     info!("Starting...");
 
-    // Run in a higher-prio thread to avoid issues with `async-io` getting
-    // confused by the low priority of the ESP IDF main task
-    // Also allocate a very large stack (for now) as `rs-matter` futures do occupy quite some space
-    let thread = std::thread::Builder::new()
-        .stack_size(75 * 1024)
-        .spawn(|| {
-            // Eagerly initialize `async-io` to minimize the risk of stack blowups later on
-            init_async_io()?;
+    // First some minimal `esp-hal` and `esp-wifi` initialization boilerplate
 
-            run()
-        })
-        .unwrap();
+    let peripherals = esp_hal::init({
+        let mut config = esp_hal::Config::default();
+        config.cpu_clock = CpuClock::max();
+        config
+    });
 
-    thread.join().unwrap()
-}
+    esp_alloc::heap_allocator!(80 * 1024);
 
-#[inline(never)]
-#[cold]
-fn run() -> Result<(), anyhow::Error> {
-    let result = block_on(matter());
+    let timg0 = TimerGroup::new(peripherals.TIMG0);
+    let rng = esp_hal::rng::Rng::new(peripherals.RNG);
 
-    if let Err(e) = &result {
-        error!("Matter aborted execution with error: {:?}", e);
-    }
+    // ... To erase generics, `Matter` takes a rand `fn` rather than a trait or a closure,
+    // so we need to store the `Rng` in a global variable
+    static RAND: Mutex<CriticalSectionRawMutex, RefCell<Option<Rng>>> =
+        Mutex::new(RefCell::new(None));
+    RAND.lock(|r| *r.borrow_mut() = Some(rng.clone()));
+
+    // TrouBLE needs the BLE controller to be static, which
+    // means the `EspWifiController` must be static too.
+    let init = &*mk_static!(
+        EspWifiController<'static>,
+        esp_wifi::init(timg0.timer0, rng, peripherals.RADIO_CLK,).unwrap()
+    );
+
+    #[cfg(not(feature = "esp32"))]
     {
-        info!("Matter finished execution successfully");
+        esp_hal_embassy::init(
+            esp_hal::timer::systimer::SystemTimer::new(peripherals.SYSTIMER).alarm0,
+        );
+    }
+    #[cfg(feature = "esp32")]
+    {
+        esp_hal_embassy::init(timg0.timer1);
     }
 
-    result
-}
-
-async fn matter() -> Result<(), anyhow::Error> {
-    // Initialize the Matter stack (can be done only once),
+    // Now, initialize the Matter stack (can be done only once),
     // as we'll run it in this thread
-    let stack = MATTER_STACK
-        .uninit()
-        .init_with(EspWifiNCMatterStack::init_default(
-            &BasicInfoConfig {
-                vid: 0xFFF1,
-                pid: 0x8000,
-                hw_ver: 2,
-                sw_ver: 1,
-                sw_ver_str: "1",
-                serial_no: "aabbccdd",
-                device_name: "MyLight",
-                product_name: "ACME Light",
-                vendor_name: "ACME",
-            },
-            BasicCommData {
-                password: 20202021,
-                discriminator: 3840,
-            },
-            &DEV_ATT,
-        ));
+    // The Matter stack is allocated statically to avoid program stack blowups.
+    // It is also (currently) a mandatory requirement when the wireless stack variation is used.
+    let stack = mk_static!(EmbassyWifiMatterStack<()>).init_with(EmbassyWifiMatterStack::init(
+        &BasicInfoConfig {
+            vid: TEST_VID,
+            pid: TEST_PID,
+            hw_ver: 2,
+            sw_ver: 1,
+            sw_ver_str: "1",
+            serial_no: "aabbccdd",
+            device_name: "MyLight",
+            product_name: "ACME Light",
+            vendor_name: "ACME",
+        },
+        TEST_BASIC_COMM_DATA,
+        &TEST_DEV_ATT,
+        MdnsType::Builtin,
+        || core::time::Duration::from_millis(embassy_time::Instant::now().as_millis()),
+        |buf| {
+            RAND.lock(|rng| {
+                let mut rng = rng.borrow_mut();
 
-    // Take some generic ESP-IDF stuff we'll need later
-    let sysloop = EspSystemEventLoop::take()?;
-    let timers = EspTaskTimerService::new()?;
-    let nvs = EspDefaultNvsPartition::take()?;
-    let peripherals = Peripherals::take()?;
+                buf.iter_mut()
+                    .for_each(|byte| *byte = rng.as_mut().unwrap().random() as _);
+            })
+        },
+    ));
 
     // Our "light" on-off cluster.
     // Can be anything implementing `rs_matter::data_model::AsyncHandler`
@@ -128,18 +160,29 @@ async fn matter() -> Result<(), anyhow::Error> {
             ))),
         );
 
-    let (mut wifi_modem, mut bt_modem) = peripherals.modem.split();
+    // Currently (and unlike `embassy-net`) TroubBLE does NOT support dynamic stack creation/teardown
+    // Therefore, we need to create the BLE controller (and the Matter BTP stack!) once and it would live forever
+    let controller = ExternalController::<_, 20>::new(BleConnector::new(&init, peripherals.BT));
+    let btp_peripheral = TroubleBtpGattPeripheral::new(
+        controller,
+        &stack.network().embedding().embedding().ble_context(),
+        mk_static!(
+            GPHostResources<ExternalController<BleConnector<'static>, 20>>,
+            GPHostResources::new(QOS)
+        ),
+    )
+    .unwrap();
 
     // Run the Matter stack with our handler
     // Using `pin!` is completely optional, but saves some memory due to `rustc`
     // not being very intelligent w.r.t. stack usage in async functions
     let mut matter = pin!(stack.run(
-        // The Matter stack needs the Wifi modem peripheral
-        EspMatterWifi::new(&mut wifi_modem, sysloop, timers, nvs.clone()),
-        // The Matter stack needs the BT modem peripheral
-        EspMatterBle::new(&mut bt_modem, nvs, stack),
+        // The Matter stack needs to instantiate an `embassy-net` `Driver` and `Controller`
+        EmbassyWifi::new(WifiDriverProvider(&init, peripherals.WIFI), &stack),
+        // The Matter stack needs BLE
+        PreexistingBle::new(btp_peripheral),
         // The Matter stack needs a persister to store its state
-        // `EspPersist`+`EspKvBlobStore` saves to a user-supplied NVS partition
+        // `EmbassyPersist`+`EspKvBlobStore` saves to a user-supplied NVS partition
         // under namespace `esp-idf-matter`
         DummyPersist,
         //EspPersist::new_wifi_ble(EspKvBlobStore::new_default(nvs.clone())?, stack),
@@ -171,15 +214,8 @@ async fn matter() -> Result<(), anyhow::Error> {
     });
 
     // Schedule the Matter run & the device loop together
-    select(&mut matter, &mut device).coalesce().await?;
-
-    Ok(())
+    select(&mut matter, &mut device).coalesce().await.unwrap();
 }
-
-/// The Matter stack is allocated statically to avoid
-/// program stack blowups.
-/// It is also a mandatory requirement when the `WifiBle` stack variation is used.
-static MATTER_STACK: StaticCell<EspWifiNCMatterStack<()>> = StaticCell::new();
 
 /// Endpoint 0 (the root endpoint) always runs
 /// the hidden Matter system clusters, so we pick ID=1
@@ -189,7 +225,7 @@ const LIGHT_ENDPOINT_ID: u16 = 1;
 const NODE: Node = Node {
     id: 0,
     endpoints: &[
-        EspWifiNCMatterStack::<()>::root_metadata(),
+        EmbassyWifiMatterStack::<()>::root_metadata(),
         Endpoint {
             id: LIGHT_ENDPOINT_ID,
             device_types: &[DEV_TYPE_ON_OFF_LIGHT],
@@ -197,3 +233,84 @@ const NODE: Node = Node {
         },
     ],
 };
+
+/// If you are OK with having Wifi running all the time and find this too verbose, scrap it!
+/// Use `PreexistingWireless::new` instead when instantiating the Matter stack.
+///
+/// Note that this won't you save much in terms of LOCs after all, as you still have to do the
+/// equivalent of `WifiDriverProvider::provide` except in your `main()` function.
+struct WifiDriverProvider<'a, 'd>(&'a EspWifiController<'d>, esp_hal::peripherals::WIFI);
+
+impl<'a, 'd> rs_matter_embassy::wireless::WifiDriverProvider for WifiDriverProvider<'a, 'd> {
+    type Driver<'t>
+        = WifiDevice<'t, WifiStaDevice>
+    where
+        Self: 't;
+    type Controller<'t>
+        = wifi_controller::EspController<'t>
+    where
+        Self: 't;
+
+    async fn provide(&mut self) -> (Self::Driver<'_>, Self::Controller<'_>) {
+        let (wifi_interface, controller) =
+            esp_wifi::wifi::new_with_mode(self.0, &mut self.1, WifiStaDevice).unwrap();
+
+        (wifi_interface, wifi_controller::EspController(controller))
+    }
+}
+
+// TODO:
+// This adaptor would've not been necessary, if there was a common Wifi trait aggreed upon and
+// implemented by all MCU Wifi controllers in the field.
+//
+// Perhaps it is time to dust-off `embedded_svc::wifi` and publish it as a micro-crate?
+// `embedded-wifi`?
+mod wifi_controller {
+    use esp_wifi::wifi::WifiController;
+
+    use rs_matter_embassy::matter::error::Error;
+    use rs_matter_embassy::stack::wireless::traits::{
+        Controller, NetworkCredentials, WifiData, WirelessData,
+    };
+
+    pub struct EspController<'a>(pub WifiController<'a>);
+
+    impl Controller for EspController<'_> {
+        type Data = WifiData;
+
+        async fn scan<F>(
+            &mut self,
+            network_id: Option<
+                &<<Self::Data as WirelessData>::NetworkCredentials as NetworkCredentials>::NetworkId,
+            >,
+            callback: F,
+        ) -> Result<(), Error>
+        where
+            F: FnMut(Option<&<Self::Data as WirelessData>::ScanResult>) -> Result<(), Error>,
+        {
+            todo!()
+        }
+
+        async fn connect(
+            &mut self,
+            creds: &<Self::Data as WirelessData>::NetworkCredentials,
+        ) -> Result<(), Error> {
+            todo!()
+        }
+
+        async fn connected_network(
+            &mut self,
+        ) -> Result<
+            Option<
+                <<Self::Data as WirelessData>::NetworkCredentials as NetworkCredentials>::NetworkId,
+            >,
+            Error,
+        > {
+            todo!()
+        }
+
+        async fn stats(&mut self) -> Result<<Self::Data as WirelessData>::Stats, Error> {
+            todo!()
+        }
+    }
+}

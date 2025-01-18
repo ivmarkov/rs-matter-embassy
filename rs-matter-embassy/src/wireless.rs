@@ -2,18 +2,15 @@ use edge_nal_embassy::UdpBuffers;
 use embassy_net::StackResources;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 
-use rs_matter::error::Error;
-use rs_matter::tlv::{FromTLV, ToTLV};
 use rs_matter::transport::network::{MAX_RX_PACKET_SIZE, MAX_TX_PACKET_SIZE};
 use rs_matter::utils::init::{init, Init};
 
 use rs_matter::utils::sync::IfMutex;
-use rs_matter_stack::network::{Embedding, Network};
+use rs_matter_stack::network::Embedding;
 use rs_matter_stack::persist::KvBlobBuf;
-use rs_matter_stack::wireless::traits::{Ble, BleTask, WirelessConfig, WirelessData};
 use rs_matter_stack::{MatterStack, WirelessBle};
 
-use crate::ble::{BleControllerProvider, TroubleBtpGattContext, TroubleBtpGattPeripheral};
+use crate::ble::TroubleBtpGattContext;
 use crate::netif::{MAX_META_DATA, MAX_SOCKETS};
 
 pub use wifi::*;
@@ -22,25 +19,23 @@ pub use wifi::*;
 pub type EmbassyWirelessMatterStack<
     'a,
     T,
-    C,
     E = (),
     const N: usize = MAX_SOCKETS,
     const TX_SZ: usize = MAX_TX_PACKET_SIZE,
     const RX_SZ: usize = MAX_RX_PACKET_SIZE,
     const M: usize = MAX_META_DATA,
-> = MatterStack<'a, EmbassyWirelessBle<T, C, E, N, TX_SZ, RX_SZ, M>>;
+> = MatterStack<'a, EmbassyWirelessBle<T, E, N, TX_SZ, RX_SZ, M>>;
 
 /// A type alias for an Embassy implementation of the `Network` trait for a Matter stack running over
 /// BLE during commissioning, and then over either WiFi or Thread when operating.
 pub type EmbassyWirelessBle<
     T,
-    C,
     E = (),
     const N: usize = MAX_SOCKETS,
     const TX_SZ: usize = MAX_TX_PACKET_SIZE,
     const RX_SZ: usize = MAX_RX_PACKET_SIZE,
     const M: usize = MAX_META_DATA,
-> = WirelessBle<CriticalSectionRawMutex, T, KvBlobBuf<EmbassyGatt<C, E, N, TX_SZ, RX_SZ, M>>>;
+> = WirelessBle<CriticalSectionRawMutex, T, KvBlobBuf<EmbassyGatt<E, N, TX_SZ, RX_SZ, M>>>;
 
 /// An embedding of the Trouble Gatt peripheral context for the `WirelessBle` network type from `rs-matter-stack`.
 ///
@@ -53,24 +48,20 @@ pub type EmbassyWirelessBle<
 ///
 /// ... where `E` can be a next-level, user-supplied embedding or just `()` if the user does not need to embed anything.
 pub struct EmbassyGatt<
-    C,
     E = (),
     const N: usize = MAX_SOCKETS,
     const TX_SZ: usize = MAX_TX_PACKET_SIZE,
     const RX_SZ: usize = MAX_RX_PACKET_SIZE,
     const M: usize = MAX_META_DATA,
-> where
-    C: trouble_host::Controller,
-{
-    btp_gatt_context: TroubleBtpGattContext<CriticalSectionRawMutex, C>,
+> {
+    btp_gatt_context: TroubleBtpGattContext<CriticalSectionRawMutex>,
     enet_context: EmbassyNetContext<N, TX_SZ, RX_SZ, M>,
     embedding: E,
 }
 
-impl<C, E, const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize>
-    EmbassyGatt<C, E, N, TX_SZ, RX_SZ, M>
+impl<E, const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize>
+    EmbassyGatt<E, N, TX_SZ, RX_SZ, M>
 where
-    C: trouble_host::Controller,
     E: Embedding,
 {
     /// Creates a new instance of the `EspGatt` embedding.
@@ -94,7 +85,7 @@ where
     }
 
     /// Return a reference to the Bluedroid Gatt peripheral context.
-    pub fn ble_context(&self) -> &TroubleBtpGattContext<CriticalSectionRawMutex, C> {
+    pub fn ble_context(&self) -> &TroubleBtpGattContext<CriticalSectionRawMutex> {
         &self.btp_gatt_context
     }
 
@@ -108,10 +99,9 @@ where
     }
 }
 
-impl<C, E, const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize> Embedding
-    for EmbassyGatt<C, E, N, TX_SZ, RX_SZ, M>
+impl<E, const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize> Embedding
+    for EmbassyGatt<E, N, TX_SZ, RX_SZ, M>
 where
-    C: trouble_host::Controller,
     E: Embedding,
 {
     const INIT: Self = Self::new();
@@ -169,62 +159,6 @@ impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize>
     }
 }
 
-/// A `Ble` trait implementation for `trouble-host`
-pub struct EmbassyMatterBle<'a, C>
-where
-    C: BleControllerProvider,
-{
-    provider: IfMutex<CriticalSectionRawMutex, C>,
-    context: &'a TroubleBtpGattContext<CriticalSectionRawMutex, C::Controller>,
-}
-
-impl<'a, C> EmbassyMatterBle<'a, C>
-where
-    C: BleControllerProvider + 'static,
-{
-    /// Create a new instance of the `EmbassyMatterBle` type.
-    pub fn new<T, E, const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize>(
-        provider: C,
-        stack: &'a EmbassyWirelessMatterStack<T, C::Controller, E, N, TX_SZ, RX_SZ, M>,
-    ) -> Self
-    where
-        T: WirelessConfig,
-        <T::Data as WirelessData>::NetworkCredentials: Clone + for<'t> FromTLV<'t> + ToTLV,
-        E: Embedding + 'static,
-    {
-        Self::wrap(
-            provider,
-            stack.network().embedding().embedding().ble_context(),
-        )
-    }
-
-    /// Wrap an existing `TroubleBtpGattContext` into an `EmbassyMatterBle` instance.
-    pub fn wrap(
-        provider: C,
-        context: &'a TroubleBtpGattContext<CriticalSectionRawMutex, C::Controller>,
-    ) -> Self {
-        Self {
-            provider: IfMutex::new(provider),
-            context,
-        }
-    }
-}
-
-impl<C> Ble for EmbassyMatterBle<'_, C>
-where
-    C: BleControllerProvider,
-{
-    async fn run<T>(&mut self, mut task: T) -> Result<(), Error>
-    where
-        T: BleTask,
-    {
-        let mut provider = self.provider.lock().await;
-        let peripheral = TroubleBtpGattPeripheral::new(&mut *provider, self.context).unwrap();
-
-        task.run(peripheral).await
-    }
-}
-
 mod wifi {
     use core::pin::pin;
 
@@ -236,6 +170,7 @@ mod wifi {
     use rs_matter::transport::network::{MAX_RX_PACKET_SIZE, MAX_TX_PACKET_SIZE};
     use rs_matter::utils::select::Coalesce;
 
+    use rs_matter_stack::network::{Embedding, Network};
     use rs_matter_stack::wireless::traits::{
         Controller, Wifi, WifiData, Wireless, WirelessTask, NC,
     };
@@ -247,13 +182,12 @@ mod wifi {
     /// A type alias for an Embassy Matter stack running over Wifi (and BLE, during commissioning).
     pub type EmbassyWifiMatterStack<
         'a,
-        C,
         E,
         const N: usize = MAX_SOCKETS,
         const TX_SZ: usize = MAX_TX_PACKET_SIZE,
         const RX_SZ: usize = MAX_RX_PACKET_SIZE,
         const M: usize = MAX_META_DATA,
-    > = EmbassyWirelessMatterStack<'a, Wifi, C, E, N, TX_SZ, RX_SZ, M>;
+    > = EmbassyWirelessMatterStack<'a, Wifi, E, N, TX_SZ, RX_SZ, M>;
 
     /// A type alias for an Embassy Matter stack running over Wifi (and BLE, during commissioning).
     ///
@@ -265,13 +199,12 @@ mod wifi {
     /// Note that Alexa does not (yet) work with non-concurrent commissioning.
     pub type EmbassyWifiNCMatterStack<
         'a,
-        C,
         E,
         const N: usize = MAX_SOCKETS,
         const TX_SZ: usize = MAX_TX_PACKET_SIZE,
         const RX_SZ: usize = MAX_RX_PACKET_SIZE,
         const M: usize = MAX_META_DATA,
-    > = EmbassyWirelessMatterStack<'a, Wifi<NC>, C, E, N, TX_SZ, RX_SZ, M>;
+    > = EmbassyWirelessMatterStack<'a, Wifi<NC>, E, N, TX_SZ, RX_SZ, M>;
 
     pub trait WifiDriverProvider {
         type Driver<'a>: embassy_net::driver::Driver
@@ -321,7 +254,15 @@ mod wifi {
         T: WifiDriverProvider,
     {
         /// Create a new instance of the `EmbassyWifi` type.
-        pub const fn new(provider: T, context: &'a EmbassyNetContext<N, TX_SZ, RX_SZ, M>) -> Self {
+        pub fn new<E>(provider: T, stack: &'a EmbassyWifiMatterStack<'a, E, N, TX_SZ, RX_SZ, M>) -> Self 
+        where 
+            E: Embedding + 'static,
+        {
+            Self::wrap(provider, stack.network().embedding().embedding().enet_context())
+        }
+
+        /// Wrap the `EmbassyWifi` type around a Wifi driver provider and a network context.
+        pub const fn wrap(provider: T, context: &'a EmbassyNetContext<N, TX_SZ, RX_SZ, M>) -> Self {
             Self { provider, context }
         }
     }
