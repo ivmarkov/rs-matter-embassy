@@ -45,13 +45,11 @@ embassy-time = "0.4"
 embassy-net = { version = "0.6", features = ["proto-ipv4", "proto-ipv6"] }
 #embedded-svc = { version = "0.28", default-features = false }
 rs-matter = { version = "0.1", default-features = false, features = ["rustcrypto"] }
-rs-matter-stack = { git = "https://github.com/ivmarkov/rs-matter-stack", default-features = false, optional = true, features = ["rystcrypto"] }
+rs-matter-stack = { git = "https://github.com/ivmarkov/rs-matter-stack", default-features = false, optional = true, features = ["rustcrypto"] }
 edge-nal = "0.5"
 edge-nal-embassy = "0.5"
 embedded-storage-async = "0.4.1"
 sequential-storage = "3"
-#trouble-host = { version = "0.1", git = "https://github.com/ivmarkov/trouble", branch = "last-data2" }
-#trouble-host = { version = "0.1", git = "https://github.com/embassy-rs/trouble" }
 #trouble-host = { version = "0.1", git = "https://github.com/ivmarkov/trouble" }
 trouble-host = { version = "0.1", path = "../trouble/host" }
 bt-hci = { version = "0.1", default-features = false }

@@ -17,6 +17,7 @@ pub mod error;
 #[cfg(feature = "rs-matter-stack")]
 pub mod eth;
 pub mod matter;
+pub mod nal;
 pub mod netif;
 #[cfg(feature = "rs-matter-stack")]
 pub mod persist;
