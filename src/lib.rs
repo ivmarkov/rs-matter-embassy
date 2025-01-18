@@ -16,8 +16,11 @@ pub mod ble;
 pub mod error;
 #[cfg(feature = "rs-matter-stack")]
 pub mod eth;
+pub mod matter;
 pub mod netif;
 #[cfg(feature = "rs-matter-stack")]
 pub mod persist;
+#[cfg(feature = "rs-matter-stack")]
+pub mod stack;
 #[cfg(feature = "rs-matter-stack")]
 pub mod wireless;
