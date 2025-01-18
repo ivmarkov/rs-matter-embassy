@@ -1,6 +1,3 @@
-use edge_nal::UdpBind;
-use edge_nal_embassy::{Udp, UdpBuffers, UdpError};
-
 use embassy_futures::select::select;
 use embassy_net::Stack;
 use embassy_time::{Duration, Timer};
@@ -10,25 +7,24 @@ use rs_matter_stack::netif::{Netif, NetifConf};
 
 use crate::error::to_net_error;
 
+/// The maximum number of sockets that the Matter stack would use:
+/// - One, for the UDP socket used by the Matter protocol
+/// - Another, for the UDP socket used by the mDNS responder
+pub const MAX_SOCKETS: usize = 2;
+
+pub const MAX_META_DATA: usize = 4;
+
 const TIMEOUT_PERIOD_SECS: u8 = 5;
 
-/// A `Netif` and `UdpBind` traits implementation for Embassy
-/// (`embassy-net` in particular)
-pub struct EmbassyNetif<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize>
-{
+/// A `Netif` trait implementation for `embassy-net`
+pub struct EmbassyNetif<'d> {
     stack: Stack<'d>,
-    udp: Udp<'d, N, TX_SZ, RX_SZ, M>,
 }
 
-impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize>
-    EmbassyNetif<'d, N, TX_SZ, RX_SZ, M>
-{
+impl<'d> EmbassyNetif<'d> {
     /// Create a new `EmbassyNetif` instance
-    pub fn new(stack: Stack<'d>, buffers: &'d UdpBuffers<N, TX_SZ, RX_SZ, M>) -> Self {
-        Self {
-            stack,
-            udp: Udp::new(stack, buffers),
-        }
+    pub fn new(stack: Stack<'d>) -> Self {
+        Self { stack }
     }
 
     fn get_conf(&self) -> Result<NetifConf, ()> {
@@ -63,9 +59,7 @@ impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize>
     }
 }
 
-impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize> Netif
-    for EmbassyNetif<'_, N, TX_SZ, RX_SZ, M>
-{
+impl Netif for EmbassyNetif<'_> {
     async fn get_conf(&self) -> Result<Option<NetifConf>, Error> {
         Ok(EmbassyNetif::get_conf(self).ok())
     }
@@ -76,20 +70,5 @@ impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize> Net
             .map_err(to_net_error)?;
 
         Ok(())
-    }
-}
-
-impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize> UdpBind
-    for EmbassyNetif<'_, N, TX_SZ, RX_SZ, M>
-{
-    type Error = UdpError;
-
-    type Socket<'b>
-        = edge_nal_embassy::UdpSocket<'b, N, TX_SZ, RX_SZ, M>
-    where
-        Self: 'b;
-
-    async fn bind(&self, local: core::net::SocketAddr) -> Result<Self::Socket<'_>, Self::Error> {
-        self.udp.bind(local).await
     }
 }

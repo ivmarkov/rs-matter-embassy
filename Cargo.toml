@@ -16,8 +16,8 @@ rust-version = "1.78"
 [lib]
 harness = false
 
-[patch.'https://github.com/ivmarkov/rs-matter-stack']
-rs-matter-stack = { path = "../rs-matter-stack" }
+#[patch.'https://github.com/ivmarkov/rs-matter-stack']
+#rs-matter-stack = { path = "../rs-matter-stack" }
 
 [patch.crates-io]
 rs-matter = { git = "https://github.com/ivmarkov/rs-matter" }

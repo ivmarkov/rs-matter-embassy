@@ -30,20 +30,20 @@ type GPHostResources<C> = HostResources<C, MAX_CONNECTIONS, MAX_CHANNELS, MAX_MT
 
 type External = [u8; 0];
 
-pub trait ControllerFactory {
+pub trait BleControllerProvider {
     type Controller: Controller;
 
-    async fn create(&self) -> Self::Controller;
+    async fn provide(&mut self) -> Self::Controller;
 }
 
-impl<T> ControllerFactory for &T
+impl<T> BleControllerProvider for &mut T
 where
-    T: ControllerFactory,
+    T: BleControllerProvider,
 {
     type Controller = T::Controller;
 
-    async fn create(&self) -> Self::Controller {
-        (*self).create().await
+    async fn provide(&mut self) -> Self::Controller {
+        (*self).provide().await
     }
 }
 
@@ -159,26 +159,32 @@ where
 pub struct TroubleBtpGattPeripheral<'a, M, C>
 where
     M: RawMutex,
-    C: ControllerFactory,
+    C: BleControllerProvider,
 {
-    factory: C,
+    provider: IfMutex<M, C>,
     context: &'a TroubleBtpGattContext<M, C::Controller>,
 }
 
 impl<'a, M, C> TroubleBtpGattPeripheral<'a, M, C>
 where
     M: RawMutex,
-    C: ControllerFactory,
+    C: BleControllerProvider,
 {
     /// Create a new instance.
     ///
     /// Creation might fail if the GATT context cannot be reset, so user should ensure
     /// that there are no other GATT peripherals running before calling this function.
-    pub fn new(factory: C, context: &'a TroubleBtpGattContext<M, C::Controller>) -> Result<Self, ()>
+    pub fn new(
+        provider: C,
+        context: &'a TroubleBtpGattContext<M, C::Controller>,
+    ) -> Result<Self, ()>
     where
-        C: ControllerFactory,
+        C: BleControllerProvider,
     {
-        Ok(Self { factory, context })
+        Ok(Self {
+            provider: IfMutex::new(provider),
+            context,
+        })
     }
 
     /// Run the GATT peripheral.
@@ -193,7 +199,8 @@ where
     {
         let mut resources = self.context.resources.lock().await;
 
-        let controller = self.factory.create().await; // TODO
+        let mut provider = self.provider.lock().await;
+        let controller = provider.provide().await; // TODO
 
         let builder = trouble_host::new(controller, &mut resources);
 
@@ -347,7 +354,7 @@ where
         peripheral: &mut Peripheral<'p, C::Controller>,
     ) -> Result<
         Connection<'p>,
-        BleHostError<<<C as ControllerFactory>::Controller as embedded_io::ErrorType>::Error>,
+        BleHostError<<<C as BleControllerProvider>::Controller as embedded_io::ErrorType>::Error>,
     > {
         let service_adv_enc_data = service_adv_data
             .service_payload_iter()
@@ -387,7 +394,7 @@ where
         address: BtAddr,
     ) -> Result<
         (),
-        BleHostError<<<C as ControllerFactory>::Controller as embedded_io::ErrorType>::Error>,
+        BleHostError<<<C as BleControllerProvider>::Controller as embedded_io::ErrorType>::Error>,
     > {
         self.context
             .ind
@@ -410,7 +417,7 @@ where
 impl<M, C> GattPeripheral for TroubleBtpGattPeripheral<'_, M, C>
 where
     M: RawMutex,
-    C: ControllerFactory,
+    C: BleControllerProvider,
 {
     async fn run<F>(
         &self,
