@@ -1,4 +1,4 @@
-# (WIP) Run [rs-matter](https://github.com/project-chip/rs-matter) on bare-metal MCUs with [Embassy](https://github.com/embassy-rs/embassy)
+# (WIP) Run [rs-matter](https://github.com/project-chip/rs-matter) on MCUs with [Embassy](https://github.com/embassy-rs/embassy)
 
 [![CI](https://github.com/ivmarkov/rs-matter-embassy/actions/workflows/ci.yml/badge.svg)](https://github.com/ivmarkov/rs-matter-embassy/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/rs-matter-embassy.svg)](https://crates.io/crates/rs-matter-embassy)
