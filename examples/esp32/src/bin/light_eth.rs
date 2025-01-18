@@ -1,4 +1,4 @@
-//! An example utilizing the `EspEthMatterStack` struct.
+//! An example utilizing the `EmbassyEthMatterStack` struct.
 //! As the name suggests, this Matter stack assembly uses Ethernet as the main transport, as well as for commissioning.
 //!
 //! Notice thart we actually don't use Ethernet for real, as ESP32s don't have Ethernet ports out of the box.

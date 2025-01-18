@@ -1,11 +1,10 @@
-//! An example utilizing the `EspWifiNCMatterStack` struct.
+//! An example utilizing the `EmbassyWifiMatterStack` struct.
 //!
 //! As the name suggests, this Matter stack assembly uses Wifi as the main transport,
-//! (and thus BLE for commissioning), where `NC` stands for non-concurrent commisisoning
-//! (i.e., the stack will not run the BLE and Wifi radio simultaneously, which saves memory).
+//! and thus BLE for commissioning.
 //!
 //! If you want to use Ethernet, utilize `EspEthMatterStack` instead.
-//! If you want to use concurrent commissioning, utilize `EspWifiMatterStack` instead
+//! If you want to use non-concurrent commissioning, utilize `EspWifiNCMatterStack` instead
 //! (Alexa does not work (yet) with non-concurrent commissioning).
 //!
 //! The example implements a fictitious Light device (an On-Off Matter cluster).
