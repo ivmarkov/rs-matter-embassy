@@ -40,9 +40,6 @@ use rs_matter_stack::persist::DummyPersist;
 
 use static_cell::StaticCell;
 
-#[path = "dev_att/dev_att.rs"]
-mod dev_att;
-
 const WIFI_SSID: &str = env!("WIFI_SSID");
 const WIFI_PASS: &str = env!("WIFI_PASS");
 
@@ -201,8 +198,6 @@ async fn matter() -> Result<(), anyhow::Error> {
 /// The Matter stack is allocated statically to avoid
 /// program stack blowups.
 static MATTER_STACK: StaticCell<EspEthMatterStack<()>> = StaticCell::new();
-
-static DEV_ATT: dev_att::HardCodedDevAtt = dev_att::HardCodedDevAtt::new();
 
 /// Endpoint 0 (the root endpoint) always runs
 /// the hidden Matter system clusters, so we pick ID=1

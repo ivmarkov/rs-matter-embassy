@@ -39,9 +39,6 @@ use rs_matter_stack::persist::DummyPersist;
 
 use static_cell::StaticCell;
 
-#[path = "dev_att/dev_att.rs"]
-mod dev_att;
-
 fn main() -> Result<(), anyhow::Error> {
     EspLogger::initialize_default();
 
@@ -184,8 +181,6 @@ async fn matter() -> Result<(), anyhow::Error> {
 /// program stack blowups.
 /// It is also a mandatory requirement when the `WifiBle` stack variation is used.
 static MATTER_STACK: StaticCell<EspWifiNCMatterStack<()>> = StaticCell::new();
-
-static DEV_ATT: dev_att::HardCodedDevAtt = dev_att::HardCodedDevAtt::new();
 
 /// Endpoint 0 (the root endpoint) always runs
 /// the hidden Matter system clusters, so we pick ID=1
