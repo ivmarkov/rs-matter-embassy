@@ -16,8 +16,8 @@ rust-version = "1.78"
 [lib]
 harness = false
 
-#[patch.'https://github.com/ivmarkov/rs-matter-stack']
-#rs-matter-stack = { path = "../rs-matter-stack" }
+[patch.'https://github.com/ivmarkov/rs-matter-stack']
+rs-matter-stack = { path = "../rs-matter-stack" }
 
 [patch.crates-io]
 rs-matter = { git = "https://github.com/ivmarkov/rs-matter" }
@@ -60,6 +60,7 @@ scopeguard = { version = "1", default-features = false }
 esp-hal = { version = "0.23", features = ["esp32"] }
 esp-wifi = { version = "0.12", features = ["esp32", "ble", "wifi"] }
 static_cell = "2"
+smoltcp = { version = "0.12", default-features = false }
 
 [dev-dependencies]
 embassy-time-queue-utils = { version = "0.1", features = ["generic-queue-64"] }

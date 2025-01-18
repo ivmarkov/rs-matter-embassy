@@ -1,30 +1,46 @@
+use edge_nal_embassy::UdpBuffers;
+use embassy_net::StackResources;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 
 use rs_matter::error::Error;
 use rs_matter::tlv::{FromTLV, ToTLV};
 use rs_matter::utils::init::{init, Init};
 
+use rs_matter::utils::sync::IfMutex;
 use rs_matter_stack::network::{Embedding, Network};
 use rs_matter_stack::persist::KvBlobBuf;
-use rs_matter_stack::wireless::traits::{Ble, WirelessConfig, WirelessData};
+use rs_matter_stack::wireless::traits::{Ble, BleTask, WirelessConfig, WirelessData};
 use rs_matter_stack::{MatterStack, WirelessBle};
 
 use crate::ble::{ControllerFactory, TroubleBtpGattContext, TroubleBtpGattPeripheral};
 
-//pub mod wifi;
+pub use wifi::*;
 
-// #[cfg(esp_idf_comp_esp_wifi_enabled)]
-// pub use wifi::*;
+/// A type alias for an Embassy Matter stack running over a wireless network (Wifi or Thread) and BLE.
+pub type EmbassyWirelessMatterStack<
+    'a,
+    const N: usize,
+    const TX_SZ: usize,
+    const RX_SZ: usize,
+    const M: usize,
+    T,
+    C,
+    E,
+> = MatterStack<'a, EmbassyWirelessBle<N, TX_SZ, RX_SZ, M, T, C, E>>;
 
-/// A type alias for an ESP-IDF Matter stack running over a wireless network (Wifi or Thread) and BLE.
-pub type EmbassyWirelessMatterStack<'a, T, C, E> = MatterStack<'a, EmbassyWirelessBle<T, C, E>>;
-
-/// A type alias for an ESP-IDF implementation of the `Network` trait for a Matter stack running over
+/// A type alias for an Embassy implementation of the `Network` trait for a Matter stack running over
 /// BLE during commissioning, and then over either WiFi or Thread when operating.
-pub type EmbassyWirelessBle<T, C, E> =
-    WirelessBle<CriticalSectionRawMutex, T, KvBlobBuf<EmbassyGatt<C, E>>>;
+pub type EmbassyWirelessBle<
+    const N: usize,
+    const TX_SZ: usize,
+    const RX_SZ: usize,
+    const M: usize,
+    T,
+    C,
+    E,
+> = WirelessBle<CriticalSectionRawMutex, T, KvBlobBuf<EmbassyGatt<N, TX_SZ, RX_SZ, M, C, E>>>;
 
-/// An embedding of the ESP IDF Bluedroid Gatt peripheral context for the `WirelessBle` network type from `rs-matter-stack`.
+/// An embedding of the Trouble Gatt peripheral context for the `WirelessBle` network type from `rs-matter-stack`.
 ///
 /// Allows the memory of this context to be statically allocated and cost-initialized.
 ///
@@ -34,15 +50,23 @@ pub type EmbassyWirelessBle<T, C, E> =
 /// ```
 ///
 /// ... where `E` can be a next-level, user-supplied embedding or just `()` if the user does not need to embed anything.
-pub struct EmbassyGatt<C, E = ()>
-where
+pub struct EmbassyGatt<
+    const N: usize,
+    const TX_SZ: usize,
+    const RX_SZ: usize,
+    const M: usize,
+    C,
+    E = (),
+> where
     C: trouble_host::Controller,
 {
     btp_gatt_context: TroubleBtpGattContext<CriticalSectionRawMutex, C>,
+    enet_context: EmbassyNetContext<N, TX_SZ, RX_SZ, M>,
     embedding: E,
 }
 
-impl<C, E> EmbassyGatt<C, E>
+impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize, C, E>
+    EmbassyGatt<N, TX_SZ, RX_SZ, M, C, E>
 where
     C: trouble_host::Controller,
     E: Embedding,
@@ -53,6 +77,7 @@ where
     const fn new() -> Self {
         Self {
             btp_gatt_context: TroubleBtpGattContext::new(),
+            enet_context: EmbassyNetContext::new(),
             embedding: E::INIT,
         }
     }
@@ -61,13 +86,18 @@ where
     fn init() -> impl Init<Self> {
         init!(Self {
             btp_gatt_context <- TroubleBtpGattContext::init(),
+            enet_context: EmbassyNetContext::new(),
             embedding <- E::init(),
         })
     }
 
     /// Return a reference to the Bluedroid Gatt peripheral context.
-    pub fn context(&self) -> &TroubleBtpGattContext<CriticalSectionRawMutex, C> {
+    pub fn ble_context(&self) -> &TroubleBtpGattContext<CriticalSectionRawMutex, C> {
         &self.btp_gatt_context
+    }
+
+    pub fn enet_context(&self) -> &EmbassyNetContext<N, TX_SZ, RX_SZ, M> {
+        &self.enet_context
     }
 
     /// Return a reference to the embedding.
@@ -76,7 +106,8 @@ where
     }
 }
 
-impl<C, E> Embedding for EmbassyGatt<C, E>
+impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize, C, E> Embedding
+    for EmbassyGatt<N, TX_SZ, RX_SZ, M, C, E>
 where
     C: trouble_host::Controller,
     E: Embedding,
@@ -88,25 +119,65 @@ where
     }
 }
 
-/// A `Ble` trait implementation via ESP-IDF
+pub struct EmbassyNetContext<const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize>
+{
+    inner: IfMutex<CriticalSectionRawMutex, EmbassyNetContextInner<N, TX_SZ, RX_SZ, M>>,
+}
+
+impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize> Default for EmbassyNetContext<N, TX_SZ, RX_SZ, M> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize>
+    EmbassyNetContext<N, TX_SZ, RX_SZ, M>
+{
+    pub const fn new() -> Self {
+        Self {
+            inner: IfMutex::new(EmbassyNetContextInner::new()),
+        }
+    }
+}
+
+struct EmbassyNetContextInner<
+    const N: usize,
+    const TX_SZ: usize,
+    const RX_SZ: usize,
+    const M: usize,
+> {
+    resources: StackResources<N>,
+    buffers: UdpBuffers<N, TX_SZ, RX_SZ, M>,
+}
+
+impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize>
+    EmbassyNetContextInner<N, TX_SZ, RX_SZ, M>
+{
+    pub const fn new() -> Self {
+        Self {
+            resources: StackResources::new(),
+            buffers: UdpBuffers::new(),
+        }
+    }
+}
+
+/// A `Ble` trait implementation for `trouble-host`
 pub struct EmbassyMatterBle<'a, C>
 where
     C: ControllerFactory,
 {
     factory: C,
     context: &'a TroubleBtpGattContext<CriticalSectionRawMutex, C::Controller>,
-    //nvs: EspDefaultNvsPartition,
 }
 
 impl<'a, C> EmbassyMatterBle<'a, C>
 where
     C: ControllerFactory + 'static,
 {
-    /// Create a new instance of the `EspBle` type.
-    pub fn new<T, E>(
+    /// Create a new instance of the `EmbassyMatterBle` type.
+    pub fn new<const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize, T, E>(
         factory: C,
-        //nvs: EspDefaultNvsPartition,
-        stack: &'a EmbassyWirelessMatterStack<T, C::Controller, E>,
+        stack: &'a EmbassyWirelessMatterStack<N, TX_SZ, RX_SZ, M, T, C::Controller, E>,
     ) -> Self
     where
         T: WirelessConfig,
@@ -115,287 +186,165 @@ where
     {
         Self::wrap(
             factory,
-            //nvs,
-            stack.network().embedding().embedding().context(),
+            stack.network().embedding().embedding().ble_context(),
         )
     }
 
-    /// Wrap an existing `EspBtpGattContext` and `BluetoothModemPeripheral` into a new instance of the `EspBle` type.
+    /// Wrap an existing `TroubleBtpGattContext` into an `EmbassyMatterBle` instance.
     pub fn wrap(
         factory: C,
-        //nvs: EspDefaultNvsPartition,
         context: &'a TroubleBtpGattContext<CriticalSectionRawMutex, C::Controller>,
     ) -> Self {
-        //into_ref!(modem);
-
-        Self {
-            factory,
-            context,
-            //nvs,
-        }
+        Self { factory, context }
     }
 }
 
-impl<'a, C> Ble for EmbassyMatterBle<'a, C>
+impl<C> Ble for EmbassyMatterBle<'_, C>
 where
     C: ControllerFactory,
 {
-    type Peripheral<'t>
-        = TroubleBtpGattPeripheral<'a, CriticalSectionRawMutex, &'t C>
+    async fn run<T>(&mut self, mut task: T) -> Result<(), Error>
     where
-        Self: 't;
-
-    async fn start(&mut self) -> Result<Self::Peripheral<'_>, Error> {
+        T: BleTask,
+    {
         let peripheral = TroubleBtpGattPeripheral::new(&self.factory, self.context).unwrap();
 
-        Ok(peripheral)
+        task.run(peripheral).await
     }
 }
 
-#[cfg(esp_idf_comp_esp_wifi_enabled)]
 mod wifi {
-    use std::io;
+    use core::pin::pin;
 
-    use alloc::sync::Arc;
-
-    use edge_nal::UdpBind;
-    use edge_nal_std::{Stack, UdpSocket};
-
-    use embassy_sync::mutex::Mutex;
-
-    use embedded_svc::wifi::asynch::Wifi as WifiSvc;
-
-    use enumset::EnumSet;
-
-    use esp_idf_svc::eventloop::EspSystemEventLoop;
-    use esp_idf_svc::hal::into_ref;
-    use esp_idf_svc::hal::modem::WifiModemPeripheral;
-    use esp_idf_svc::hal::peripheral::{Peripheral, PeripheralRef};
-    use esp_idf_svc::hal::task::embassy_sync::EspRawMutex;
-    use esp_idf_svc::handle::RawHandle;
-    use esp_idf_svc::netif::EspNetif;
-    use esp_idf_svc::nvs::EspDefaultNvsPartition;
-    use esp_idf_svc::sys::{esp, EspError};
-    use esp_idf_svc::timer::EspTaskTimerService;
-    use esp_idf_svc::wifi::{AccessPointInfo, AsyncWifi, Capability, Configuration, EspWifi};
+    use embassy_futures::select::select;
+    use embassy_net::Config;
 
     use rs_matter::error::Error;
+    use rs_matter::utils::select::Coalesce;
 
-    use rs_matter_stack::netif::{Netif, NetifConf, NetifRun};
-    use rs_matter_stack::wireless::svc::SvcWifiController;
-    use rs_matter_stack::wireless::traits::{Wifi, WifiData, Wireless, NC};
+    use rs_matter_stack::netif::DummyNetif;
+    use rs_matter_stack::wireless::traits::{
+        Controller, Wifi, WifiData, Wireless, WirelessTask, NC,
+    };
 
-    use crate::error::to_net_error;
-    use crate::netif::EspMatterNetif;
+    use crate::netif::EmbassyNetif;
 
-    use super::EspWirelessMatterStack;
+    use super::{EmbassyNetContext, EmbassyWirelessMatterStack};
 
-    /// A type alias for an ESP-IDF Matter stack running over Wifi (and BLE, during commissioning).
-    pub type EspWifiMatterStack<'a, E> = EmbassyWirelessMatterStack<'a, Wifi, E>;
+    /// A type alias for an Embassy Matter stack running over Wifi (and BLE, during commissioning).
+    pub type EmbassyWifiMatterStack<
+        'a,
+        const N: usize,
+        const TX_SZ: usize,
+        const RX_SZ: usize,
+        const M: usize,
+        C,
+        E,
+    > = EmbassyWirelessMatterStack<'a, N, TX_SZ, RX_SZ, M, Wifi, C, E>;
 
-    /// A type alias for an ESP-IDF Matter stack running over Wifi (and BLE, during commissioning).
+    /// A type alias for an Embassy Matter stack running over Wifi (and BLE, during commissioning).
     ///
-    /// Unlike `EspWifiMatterStack`, this type alias runs the commissioning in a non-concurrent mode,
+    /// Unlike `EmbassyWifiMatterStack`, this type alias runs the commissioning in a non-concurrent mode,
     /// where the device runs either BLE or Wifi, but not both at the same time.
     ///
     /// This is useful to save memory by only having one of the stacks active at any point in time.
     ///
     /// Note that Alexa does not (yet) work with non-concurrent commissioning.
-    pub type EspWifiNCMatterStack<'a, E> = EmbassyWirelessMatterStack<'a, Wifi<NC>, E>;
+    pub type EmbassyWifiNCMatterStack<
+        'a,
+        const N: usize,
+        const TX_SZ: usize,
+        const RX_SZ: usize,
+        const M: usize,
+        C,
+        E,
+    > = EmbassyWirelessMatterStack<'a, N, TX_SZ, RX_SZ, M, Wifi<NC>, C, E>;
 
-    /// The relation between a network interface and a controller is slightly different
-    /// in the ESP-IDF crates compared to what `rs-matter-stack` wants, hence we need this helper type.
-    pub struct EspWifiSplit<'a>(
-        Arc<Mutex<EspRawMutex, AsyncWifi<EspWifi<'a>>>>,
-        EspSystemEventLoop,
-    );
-
-    impl<'a> WifiSvc for EspWifiSplit<'a> {
-        type Error = EspError;
-
-        async fn get_capabilities(&self) -> Result<EnumSet<Capability>, Self::Error> {
-            let wifi = self.0.lock().await;
-
-            wifi.get_capabilities()
-        }
-
-        async fn get_configuration(&self) -> Result<Configuration, Self::Error> {
-            let wifi = self.0.lock().await;
-
-            wifi.get_configuration()
-        }
-
-        async fn set_configuration(&mut self, conf: &Configuration) -> Result<(), Self::Error> {
-            let mut wifi = self.0.lock().await;
-
-            wifi.set_configuration(conf)
-        }
-
-        async fn start(&mut self) -> Result<(), Self::Error> {
-            let mut wifi = self.0.lock().await;
-
-            wifi.start().await
-        }
-
-        async fn stop(&mut self) -> Result<(), Self::Error> {
-            let mut wifi = self.0.lock().await;
-
-            wifi.stop().await
-        }
-
-        async fn connect(&mut self) -> Result<(), Self::Error> {
-            let mut wifi = self.0.lock().await;
-
-            wifi.connect().await?;
-
-            // Matter needs an IPv6 address to work
-            esp!(unsafe {
-                esp_idf_svc::sys::esp_netif_create_ip6_linklocal(
-                    wifi.wifi().sta_netif().handle() as _
-                )
-            })?;
-
-            Ok(())
-        }
-
-        async fn disconnect(&mut self) -> Result<(), Self::Error> {
-            let mut wifi = self.0.lock().await;
-
-            wifi.disconnect().await
-        }
-
-        async fn is_started(&self) -> Result<bool, Self::Error> {
-            let wifi = self.0.lock().await;
-
-            wifi.is_started()
-        }
-
-        async fn is_connected(&self) -> Result<bool, Self::Error> {
-            let wifi = self.0.lock().await;
-
-            wifi.is_connected()
-        }
-
-        async fn scan_n<const N: usize>(
-            &mut self,
-        ) -> Result<(heapless::Vec<AccessPointInfo, N>, usize), Self::Error> {
-            let mut wifi = self.0.lock().await;
-
-            wifi.scan_n().await
-        }
-
-        async fn scan(&mut self) -> Result<alloc::vec::Vec<AccessPointInfo>, Self::Error> {
-            let mut wifi = self.0.lock().await;
-
-            wifi.scan().await
-        }
-    }
-
-    impl<'a> Netif for EspWifiSplit<'a> {
-        async fn get_conf(&self) -> Result<Option<NetifConf>, Error> {
-            let wifi = self.0.lock().await;
-
-            EspMatterNetif::new(wifi.wifi().sta_netif(), self.1.clone())
-                .get_conf()
-                .await
-        }
-
-        async fn wait_conf_change(&self) -> Result<(), Error> {
-            // Wait on any conf change
-            // We anyway cannot lock the wifi mutex here (would be a deadlock), so we just wait for the event
-
-            EspMatterNetif::<EspNetif>::wait_any_conf_change(&self.1)
-                .await
-                .map_err(to_net_error)?;
-
-            Ok(())
-        }
-    }
-
-    impl<'a> NetifRun for EspWifiSplit<'a> {
-        async fn run(&self) -> Result<(), Error> {
-            core::future::pending().await
-        }
-    }
-
-    impl<'a> UdpBind for EspWifiSplit<'a> {
-        type Error = io::Error;
-        type Socket<'b>
-            = UdpSocket
+    pub trait EmbassyWifiFactory {
+        type Driver<'a>: embassy_net::driver::Driver
         where
-            Self: 'b;
+            Self: 'a;
+        type Controller<'a>: Controller<Data = WifiData>
+        where
+            Self: 'a;
 
-        async fn bind(
-            &self,
-            local: core::net::SocketAddr,
-        ) -> Result<Self::Socket<'_>, Self::Error> {
-            Stack::new().bind(local).await
-        }
+        async fn create(&self) -> (Self::Driver<'_>, Self::Controller<'_>);
     }
 
-    /// A `Wireless` trait implementation via ESP-IDF's Wifi modem
-    pub struct EspMatterWifi<'d, T> {
-        modem: PeripheralRef<'d, T>,
-        sysloop: EspSystemEventLoop,
-        timer: EspTaskTimerService,
-        nvs: EspDefaultNvsPartition,
-    }
-
-    impl<'d, T> EspMatterWifi<'d, T>
+    impl<T> EmbassyWifiFactory for &T
     where
-        T: WifiModemPeripheral,
+        T: EmbassyWifiFactory,
     {
-        /// Create a new instance of the `EspMatterWifi` type.
-        pub fn new(
-            modem: impl Peripheral<P = T> + 'd,
-            sysloop: EspSystemEventLoop,
-            timer: EspTaskTimerService,
-            nvs: EspDefaultNvsPartition,
-        ) -> Self {
-            into_ref!(modem);
+        type Driver<'a>
+            = T::Driver<'a>
+        where
+            Self: 'a;
+        type Controller<'a>
+            = T::Controller<'a>
+        where
+            Self: 'a;
 
-            Self {
-                modem,
-                sysloop,
-                timer,
-                nvs,
-            }
+        async fn create(&self) -> (Self::Driver<'_>, Self::Controller<'_>) {
+            (*self).create().await
         }
     }
 
-    impl<'d, T> Wireless for EspMatterWifi<'d, T>
+    /// A `Wireless` trait implementation for `embassy-net`'s Wifi stack.
+    pub struct EmbassyWifi<
+        'a,
+        T,
+        const N: usize,
+        const TX_SZ: usize,
+        const RX_SZ: usize,
+        const M: usize,
+    > {
+        factory: T,
+        context: &'a EmbassyNetContext<N, TX_SZ, RX_SZ, M>,
+    }
+
+    impl<'a, T, const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize>
+        EmbassyWifi<'a, T, N, TX_SZ, RX_SZ, M>
     where
-        T: WifiModemPeripheral,
+        T: EmbassyWifiFactory,
+    {
+        /// Create a new instance of the `EmbassyWifi` type.
+        pub const fn new(factory: T, context: &'a EmbassyNetContext<N, TX_SZ, RX_SZ, M>) -> Self {
+            Self { factory, context }
+        }
+    }
+
+    impl<T, const N: usize, const TX_SZ: usize, const RX_SZ: usize, const M: usize> Wireless
+        for EmbassyWifi<'_, T, N, TX_SZ, RX_SZ, M>
+    where
+        T: EmbassyWifiFactory,
     {
         type Data = WifiData;
 
-        type Netif<'a>
-            = EspWifiSplit<'a>
+        async fn run<A>(&mut self, mut task: A) -> Result<(), Error>
         where
-            Self: 'a;
+            A: WirelessTask<Data = Self::Data>,
+        {
+            let mut context = self.context.inner.lock().await;
+            let context = &mut *context;
 
-        type Controller<'a>
-            = SvcWifiController<EspWifiSplit<'a>>
-        where
-            Self: 'a;
+            let (driver, controller) = self.factory.create().await;
 
-        async fn start(&mut self) -> Result<(Self::Netif<'_>, Self::Controller<'_>), Error> {
-            let wifi = EspWifi::new(
-                &mut self.modem,
-                self.sysloop.clone(),
-                Some(self.nvs.clone()),
-            )
-            .map_err(to_net_error)?;
+            let resources = &mut context.resources;
+            let buffers = &context.buffers;
 
-            let wifi = Arc::new(Mutex::new(
-                AsyncWifi::wrap(wifi, self.sysloop.clone(), self.timer.clone())
-                    .map_err(to_net_error)?,
-            ));
+            let (stack, mut runner) =
+                embassy_net::new(driver, Config::default(), resources, 0 /*TODO */);
 
-            Ok((
-                EspWifiSplit(wifi.clone(), self.sysloop.clone()),
-                SvcWifiController::new(EspWifiSplit(wifi.clone(), self.sysloop.clone())),
-            ))
+            let stack = EmbassyNetif::new(stack, buffers);
+
+            let mut main = pin!(task.run(DummyNetif::default() /* TODO */, stack, controller));
+            let mut run = pin!(async {
+                runner.run().await;
+                #[allow(unreachable_code)]
+                Ok(())
+            });
+
+            select(&mut main, &mut run).coalesce().await
         }
     }
 }
