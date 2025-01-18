@@ -69,7 +69,8 @@ async fn main(_s: Spawner) {
 
     info!("Starting...");
 
-    // First some minimal `esp-hal` and `esp-wifi` initialization boilerplate
+    // == Step 1: ==
+    // Necessary `esp-hal` and `esp-wifi` initialization boilerplate
 
     let peripherals = esp_hal::init({
         let mut config = esp_hal::Config::default();
@@ -77,6 +78,7 @@ async fn main(_s: Spawner) {
         config
     });
 
+    // For Wifi and for the only Matter dependency which needs (~4KB) alloc - `x509`
     esp_alloc::heap_allocator!(80 * 1024);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
@@ -106,9 +108,9 @@ async fn main(_s: Spawner) {
         esp_hal_embassy::init(timg0.timer1);
     }
 
-    // Now, initialize the Matter stack (can be done only once),
-    // as we'll run it in this thread
-    // The Matter stack is allocated statically to avoid program stack blowups.
+    // == Step 2: ==
+    // Statically allocate the Matter stack.
+    // For MCUs, it is best to allocate it statically, so as to avoid program stack blowups (its memory footprint is ~ 35 to 50KB).
     // It is also (currently) a mandatory requirement when the wireless stack variation is used.
     let stack = mk_static!(EmbassyWifiMatterStack<()>).init_with(EmbassyWifiMatterStack::init(
         &BasicInfoConfig {
@@ -136,6 +138,7 @@ async fn main(_s: Spawner) {
         },
     ));
 
+    // == Step 3: ==
     // Our "light" on-off cluster.
     // Can be anything implementing `rs_matter::data_model::AsyncHandler`
     let on_off = cluster_on_off::OnOffCluster::new(Dataver::new_rand(stack.matter().rand()));
@@ -160,6 +163,7 @@ async fn main(_s: Spawner) {
             ))),
         );
 
+    // == Step 4: ==
     // Currently (and unlike `embassy-net`) TroubBLE does NOT support dynamic stack creation/teardown
     // Therefore, we need to create the BLE controller (and the Matter BTP stack!) once and it would live forever
     let controller = ExternalController::<_, 20>::new(BleConnector::new(&init, peripherals.BT));
@@ -173,19 +177,21 @@ async fn main(_s: Spawner) {
     )
     .unwrap();
 
+    // == Step 5: ==
     // Run the Matter stack with our handler
     // Using `pin!` is completely optional, but saves some memory due to `rustc`
     // not being very intelligent w.r.t. stack usage in async functions
+    //
+    // This step can be repeated in that the stack can be stopped and started multiple times, as needed.
     let mut matter = pin!(stack.run(
         // The Matter stack needs to instantiate an `embassy-net` `Driver` and `Controller`
         EmbassyWifi::new(WifiDriverProvider(&init, peripherals.WIFI), &stack),
         // The Matter stack needs BLE
         PreexistingBle::new(btp_peripheral),
         // The Matter stack needs a persister to store its state
-        // `EmbassyPersist`+`EspKvBlobStore` saves to a user-supplied NVS partition
-        // under namespace `esp-idf-matter`
+        // `EmbassyPersist`+`EmbassyKvBlobStore` saves to a user-supplied NOR Flash region
+        // However, for this demo and for simplicity, we use a dummy persister that does nothing
         DummyPersist,
-        //EspPersist::new_wifi_ble(EspKvBlobStore::new_default(nvs.clone())?, stack),
         // Our `AsyncHandler` + `AsyncMetadata` impl
         (NODE, handler),
         // No user future to run
