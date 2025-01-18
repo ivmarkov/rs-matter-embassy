@@ -10,8 +10,7 @@ description = "Run rs-matter with embassy"
 repository = "https://github.com/ivmarkov/rs-matter-embassy"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-build = "build.rs"
-rust-version = "1.78"
+rust-version = "1.84"
 
 [lib]
 harness = false
@@ -50,8 +49,8 @@ edge-nal = "0.5"
 edge-nal-embassy = "0.5"
 embedded-storage-async = "0.4.1"
 sequential-storage = "3"
-#trouble-host = { version = "0.1", git = "https://github.com/ivmarkov/trouble" }
-trouble-host = { version = "0.1", path = "../trouble/host" }
+trouble-host = { version = "0.1", git = "https://github.com/ivmarkov/trouble", branch = "const-and-others" }
+#trouble-host = { version = "0.1", path = "../../trouble/host" }
 bt-hci = { version = "0.1", default-features = false }
 embedded-io = "0.6"
 scopeguard = { version = "1", default-features = false }
@@ -63,13 +62,3 @@ smoltcp = { version = "0.12", default-features = false }
 [dev-dependencies]
 embassy-time-queue-utils = { version = "0.1", features = ["generic-queue-64"] }
 static_cell = "2.1"
-
-# [[example]]
-# name = "light"
-# path = "examples/light.rs"
-# required-features = ["examples"]
-
-# [[example]]
-# name = "light_eth"
-# path = "examples/light_eth.rs"
-# required-features = ["examples"]
