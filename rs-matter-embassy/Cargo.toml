@@ -51,7 +51,4 @@ scopeguard = { version = "1", default-features = false }
 rs-matter = { version = "0.1", default-features = false, features = ["rustcrypto"] }
 rs-matter-stack = { git = "https://github.com/ivmarkov/rs-matter-stack", default-features = false, optional = true, features = ["rustcrypto"] }
 static_cell = "2"
-
-[dev-dependencies]
-embassy-time-queue-utils = { version = "0.1", features = ["generic-queue-64"] }
-static_cell = "2.1"
+portable-atomic = { version = "1", features = ["critical-section"] }

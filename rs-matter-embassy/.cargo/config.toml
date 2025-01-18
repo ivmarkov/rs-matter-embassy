@@ -1,5 +1,6 @@
 [build]
-target = "xtensa-esp32-none-elf"
+target = "riscv32imc-unknown-none-elf"
+#target = "xtensa-esp32-none-elf"
 
 [target.'cfg(all(target_arch = "riscv32", target_os = "none"))']
 runner = "espflash flash --monitor"
