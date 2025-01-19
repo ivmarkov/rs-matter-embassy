@@ -24,7 +24,8 @@ const MAX_MTU_SIZE: usize = 27; // For now 512; // TODO const L2CAP_MTU: usize =
 const MAX_CHANNELS: usize = 2;
 const ADV_SETS: usize = 1;
 
-pub type GPHostResources<C> = HostResources<C, MAX_CONNECTIONS, MAX_CHANNELS, MAX_MTU_SIZE, ADV_SETS>;
+pub type GPHostResources<C> =
+    HostResources<C, MAX_CONNECTIONS, MAX_CHANNELS, MAX_MTU_SIZE, ADV_SETS>;
 
 pub const QOS: PacketQos = PacketQos::Fair;
 

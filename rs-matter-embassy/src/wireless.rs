@@ -254,11 +254,17 @@ mod wifi {
         T: WifiDriverProvider,
     {
         /// Create a new instance of the `EmbassyWifi` type.
-        pub fn new<E>(provider: T, stack: &'a EmbassyWifiMatterStack<'a, E, N, TX_SZ, RX_SZ, M>) -> Self 
-        where 
+        pub fn new<E>(
+            provider: T,
+            stack: &'a EmbassyWifiMatterStack<'a, E, N, TX_SZ, RX_SZ, M>,
+        ) -> Self
+        where
             E: Embedding + 'static,
         {
-            Self::wrap(provider, stack.network().embedding().embedding().enet_context())
+            Self::wrap(
+                provider,
+                stack.network().embedding().embedding().enet_context(),
+            )
         }
 
         /// Wrap the `EmbassyWifi` type around a Wifi driver provider and a network context.
