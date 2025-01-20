@@ -17,39 +17,38 @@ use rs_matter::utils::sync::{IfMutex, Signal};
 
 use trouble_host::att::{AttReq, AttRsp};
 use trouble_host::prelude::*;
-use trouble_host::{Address, BdAddr, BleHostError, Controller, Error, HostResources, Peripheral};
+use trouble_host::{Address, BdAddr, BleHostError, Controller, Error, HostResources};
 
 const MAX_CONNECTIONS: usize = MAX_BTP_SESSIONS;
 const MAX_MTU_SIZE: usize = 27; // For now 512; // TODO const L2CAP_MTU: usize = 251;
 const MAX_CHANNELS: usize = 2;
 const ADV_SETS: usize = 1;
 
-pub type GPHostResources<C> =
-    HostResources<C, MAX_CONNECTIONS, MAX_CHANNELS, MAX_MTU_SIZE, ADV_SETS>;
-
-pub const QOS: PacketQos = PacketQos::Fair;
+pub type GPHostResources = HostResources<MAX_CONNECTIONS, MAX_CHANNELS, MAX_MTU_SIZE, ADV_SETS>;
 
 type External = [u8; 0];
 
-// TODO: Future, once / if
-// https://github.com/embassy-rs/trouble/issues/252
-// is resolved
-// pub trait BleControllerProvider {
-//     type Controller<'a>: Controller where Self: 'a;
+pub trait BleControllerProvider {
+    type Controller<'a>: Controller
+    where
+        Self: 'a;
 
-//     async fn provide(&mut self) -> Self::Controller<'_>;
-// }
+    async fn provide(&mut self) -> Self::Controller<'_>;
+}
 
-// impl<T> BleControllerProvider for &mut T
-// where
-//     T: BleControllerProvider,
-// {
-//     type Controller<'a> = T::Controller<'a> where Self: 'a;
+impl<T> BleControllerProvider for &mut T
+where
+    T: BleControllerProvider,
+{
+    type Controller<'a>
+        = T::Controller<'a>
+    where
+        Self: 'a;
 
-//     async fn provide(&mut self) -> Self::Controller<'_> {
-//         (*self).provide().await
-//     }
-// }
+    async fn provide(&mut self) -> Self::Controller<'_> {
+        (*self).provide().await
+    }
+}
 
 // GATT Server definition
 #[gatt_server]
@@ -98,7 +97,7 @@ where
 {
     ind: IfMutex<M, IndBuffer>,
     ind_in_flight: Signal<M, bool>,
-    //resources: IfMutex<M, GPHostResources<C>>,
+    resources: IfMutex<M, GPHostResources>,
 }
 
 impl<M> TroubleBtpGattContext<M>
@@ -112,6 +111,7 @@ where
         Self {
             ind: IfMutex::new(IndBuffer::new()),
             ind_in_flight: Signal::new(false),
+            resources: IfMutex::new(GPHostResources::new()),
         }
     }
 
@@ -121,6 +121,7 @@ where
         init!(Self {
             ind <- IfMutex::init(IndBuffer::init()),
             ind_in_flight: Signal::new(false),
+            resources: IfMutex::new(GPHostResources::new()), // TODO: Init
         })
     }
 
@@ -153,61 +154,33 @@ where
     }
 }
 
-struct TroubleContext<C>
-where
-    C: Controller + 'static,
-{
-    _stack: Stack<'static, C>,
-    peripheral: Peripheral<'static, C>,
-    _central: Central<'static, C>,
-    runner: Runner<'static, C>,
-}
-
 /// A GATT peripheral implementation for the BTP protocol in `rs-matter` via `trouble-host`.
 /// Implements the `GattPeripheral` trait.
 pub struct TroubleBtpGattPeripheral<'a, M, C>
 where
     M: RawMutex,
-    C: Controller + 'static,
+    C: BleControllerProvider,
 {
-    // TODO: Future once / if
-    // https://github.com/embassy-rs/trouble/issues/252
-    // is resolved
-    //provider: IfMutex<M, C>,
-    trouble: IfMutex<M, TroubleContext<C>>,
+    // TODO: IDeally this should be the controller itself, but this is not possible
+    // until `bt-hci` is updated with `impl<C: Controller>` Controller for &C {}`
+    provider: IfMutex<M, C>,
     context: &'a TroubleBtpGattContext<M>,
 }
 
 impl<'a, M, C> TroubleBtpGattPeripheral<'a, M, C>
 where
     M: RawMutex,
-    C: Controller,
+    C: BleControllerProvider,
 {
     /// Create a new instance.
     ///
     /// Creation might fail if the GATT context cannot be reset, so user should ensure
     /// that there are no other GATT peripherals running before calling this function.
-    pub fn new(
-        controller: C,
-        context: &'a TroubleBtpGattContext<M>,
-        resources: &'static mut GPHostResources<C>,
-    ) -> Result<Self, ()> {
-        let builder = trouble_host::new(controller, resources);
-
-        let address = Address::random([0x41, 0x5A, 0xE3, 0x1E, 0x83, 0xE7]); // TODO
-        info!("Our address = {:?}", address);
-
-        let (stack, peripheral, central, runner) = builder.set_random_address(address).build();
-
-        Ok(Self {
-            trouble: IfMutex::new(TroubleContext {
-                _stack: stack,
-                peripheral,
-                _central: central,
-                runner,
-            }),
+    pub const fn new(provider: C, context: &'a TroubleBtpGattContext<M>) -> Self {
+        Self {
+            provider: IfMutex::new(provider),
             context,
-        })
+        }
     }
 
     /// Run the GATT peripheral.
@@ -222,8 +195,17 @@ where
     {
         info!("Starting advertising and GATT service");
 
-        let mut trouble = self.trouble.lock().await;
-        let trouble = &mut *trouble;
+        let mut provider = self.provider.lock().await;
+        let mut resources = self.context.resources.lock().await;
+
+        let controller = provider.provide().await;
+
+        let address = Address::random([0x41, 0x5A, 0xE3, 0x1E, 0x83, 0xE7]); // TODO
+        info!("Our address = {:?}", address);
+
+        let stack = trouble_host::new(controller, &mut resources).set_random_address(address);
+
+        let (mut peripheral, _, runner) = stack.build();
 
         let server = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
             name: "TrouBLE",                                             // TODO
@@ -231,12 +213,9 @@ where
         }))
         .unwrap();
 
-        let runner = &mut trouble.runner;
-        let peripheral = &mut trouble.peripheral;
-
         let _ = join(Self::run_ble(runner), async {
             loop {
-                match Self::advertise(service_name, service_adv_data, peripheral).await {
+                match Self::advertise(service_name, service_adv_data, &mut peripheral).await {
                     Ok(conn) => {
                         let events = Self::handle_events(&server, &conn, &mut callback);
                         let indications =
@@ -257,7 +236,10 @@ where
         Ok(())
     }
 
-    async fn run_ble(runner: &mut Runner<'_, C>) {
+    async fn run_ble<CC>(mut runner: Runner<'_, CC>)
+    where
+        CC: Controller,
+    {
         loop {
             if let Err(e) = runner.run().await {
                 #[cfg(feature = "defmt")]
@@ -364,11 +346,14 @@ where
     }
 
     /// Create an advertiser to use to connect to a BLE Central, and wait for it to connect.
-    async fn advertise<'p>(
+    async fn advertise<'p, CC>(
         service_name: &str,
         service_adv_data: &AdvData,
-        peripheral: &mut Peripheral<'p, C>,
-    ) -> Result<Connection<'p>, BleHostError<C::Error>> {
+        peripheral: &mut Peripheral<'p, CC>,
+    ) -> Result<Connection<'p>, BleHostError<CC::Error>>
+    where
+        CC: Controller,
+    {
         let service_adv_enc_data = service_adv_data
             .service_payload_iter()
             .collect::<Vec<_, 8>>();
@@ -401,11 +386,7 @@ where
     }
 
     /// Indicate new data on characteristic `C2` to a remote peer.
-    pub async fn indicate(
-        &self,
-        data: &[u8],
-        address: BtAddr,
-    ) -> Result<(), BleHostError<C::Error>> {
+    pub async fn indicate(&self, data: &[u8], address: BtAddr) {
         self.context
             .ind
             .with(|ind| {
@@ -419,15 +400,13 @@ where
                 }
             })
             .await;
-
-        Ok(())
     }
 }
 
 impl<M, C> GattPeripheral for TroubleBtpGattPeripheral<'_, M, C>
 where
     M: RawMutex,
-    C: Controller,
+    C: BleControllerProvider,
 {
     async fn run<F>(
         &self,
@@ -446,9 +425,7 @@ where
     }
 
     async fn indicate(&self, data: &[u8], address: BtAddr) -> Result<(), rs_matter::error::Error> {
-        TroubleBtpGattPeripheral::indicate(self, data, address)
-            .await
-            .map_err(|_| ErrorCode::BtpError)?;
+        TroubleBtpGattPeripheral::indicate(self, data, address).await;
 
         Ok(())
     }

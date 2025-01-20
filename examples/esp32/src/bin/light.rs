@@ -16,6 +16,8 @@ use core::pin::pin;
 
 use bt_hci::controller::ExternalController;
 
+use esp_backtrace as _;
+
 use embassy_executor::Spawner;
 use embassy_futures::select::select;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -30,7 +32,6 @@ use esp_wifi::EspWifiController;
 
 use log::info;
 
-use rs_matter_embassy::ble::{GPHostResources, TroubleBtpGattPeripheral, QOS};
 use rs_matter_embassy::matter::data_model::cluster_basic_information::BasicInfoConfig;
 use rs_matter_embassy::matter::data_model::cluster_on_off;
 use rs_matter_embassy::matter::data_model::device_types::DEV_TYPE_ON_OFF_LIGHT;
@@ -39,14 +40,12 @@ use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
 use rs_matter_embassy::matter::utils::sync::blocking::Mutex;
-use rs_matter_embassy::stack::network::Network;
 use rs_matter_embassy::stack::persist::DummyPersist;
 use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
-use rs_matter_embassy::stack::wireless::traits::PreexistingBle;
 use rs_matter_embassy::stack::MdnsType;
-use rs_matter_embassy::wireless::{EmbassyWifi, EmbassyWifiMatterStack};
+use rs_matter_embassy::wireless::{EmbassyBle, EmbassyWifi, EmbassyWifiMatterStack};
 
 macro_rules! mk_static {
     ($t:ty) => {{
@@ -164,20 +163,6 @@ async fn main(_s: Spawner) {
         );
 
     // == Step 4: ==
-    // Currently (and unlike `embassy-net`) TroubBLE does NOT support dynamic stack creation/teardown
-    // Therefore, we need to create the BLE controller (and the Matter BTP stack!) once and it would live forever
-    let controller = ExternalController::<_, 20>::new(BleConnector::new(&init, peripherals.BT));
-    let btp_peripheral = TroubleBtpGattPeripheral::new(
-        controller,
-        &stack.network().embedding().embedding().ble_context(),
-        mk_static!(
-            GPHostResources<ExternalController<BleConnector<'static>, 20>>,
-            GPHostResources::new(QOS)
-        ),
-    )
-    .unwrap();
-
-    // == Step 5: ==
     // Run the Matter stack with our handler
     // Using `pin!` is completely optional, but saves some memory due to `rustc`
     // not being very intelligent w.r.t. stack usage in async functions
@@ -187,7 +172,7 @@ async fn main(_s: Spawner) {
         // The Matter stack needs to instantiate an `embassy-net` `Driver` and `Controller`
         EmbassyWifi::new(WifiDriverProvider(&init, peripherals.WIFI), &stack),
         // The Matter stack needs BLE
-        PreexistingBle::new(btp_peripheral),
+        EmbassyBle::new(BleControllerProvider(&init, peripherals.BT), &stack),
         // The Matter stack needs a persister to store its state
         // `EmbassyPersist`+`EmbassyKvBlobStore` saves to a user-supplied NOR Flash region
         // However, for this demo and for simplicity, we use a dummy persister that does nothing
@@ -239,6 +224,21 @@ const NODE: Node = Node {
         },
     ],
 };
+
+/// If you are OK with having the BLE BTP peripheral instantiated all the time and find this too verbose, scrap it!
+/// Use `PreexistingBle::new` instead when instantiating the Matter stack.
+struct BleControllerProvider<'a, 'd>(&'a EspWifiController<'d>, esp_hal::peripherals::BT);
+
+impl<'a, 'd> rs_matter_embassy::ble::BleControllerProvider for BleControllerProvider<'a, 'd> {
+    type Controller<'t>
+        = ExternalController<BleConnector<'t>, 20>
+    where
+        Self: 't;
+
+    async fn provide(&mut self) -> Self::Controller<'_> {
+        ExternalController::new(BleConnector::new(self.0, &mut self.1))
+    }
+}
 
 /// If you are OK with having Wifi running all the time and find this too verbose, scrap it!
 /// Use `PreexistingWireless::new` instead when instantiating the Matter stack.
