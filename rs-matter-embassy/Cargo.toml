@@ -40,7 +40,7 @@ heapless = "0.8"
 embassy-futures = "0.1"
 embassy-sync = "0.6"
 embassy-time = "0.4"
-embassy-net = { version = "0.6", features = ["proto-ipv4", "proto-ipv6", "multicast"] }
+embassy-net = { version = "0.6", features = ["proto-ipv4", "proto-ipv6", "multicast", "dhcpv4"] }
 edge-nal-embassy = "0.5"
 embedded-storage-async = "0.4.1"
 sequential-storage = "3"
