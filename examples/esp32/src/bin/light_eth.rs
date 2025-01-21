@@ -31,6 +31,7 @@ use esp_wifi::EspWifiController;
 
 use log::info;
 
+use rs_matter_embassy::epoch::epoch;
 use rs_matter_embassy::matter::data_model::cluster_basic_information::BasicInfoConfig;
 use rs_matter_embassy::matter::data_model::cluster_on_off;
 use rs_matter_embassy::matter::data_model::device_types::DEV_TYPE_ON_OFF_LIGHT;
@@ -71,7 +72,7 @@ macro_rules! mk_static {
 
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
-    esp_println::logger::init_logger_from_env();
+    esp_println::logger::init_logger(log::LevelFilter::Info);
 
     info!("Starting...");
 
@@ -129,7 +130,7 @@ async fn main(spawner: Spawner) {
         TEST_BASIC_COMM_DATA,
         &TEST_DEV_ATT,
         MdnsType::Builtin,
-        || core::time::Duration::from_millis(embassy_time::Instant::now().as_millis()),
+        epoch,
         |buf| {
             RAND.lock(|rng| {
                 let mut rng = rng.borrow_mut();

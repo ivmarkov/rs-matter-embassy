@@ -1,3 +1,5 @@
+//! Persistence: `EmbassyPersist` - an implementation of the `Persist` trait that uses the `sequential_storage::map` API
+
 use core::cell::RefCell;
 use core::ops::Range;
 

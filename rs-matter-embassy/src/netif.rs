@@ -1,3 +1,5 @@
+//! Network interface: `EmbassyNetif - a `Netif` trait implementation for `embassy-net`
+
 use embassy_futures::select::select;
 use embassy_net::Stack;
 use embassy_time::{Duration, Timer};

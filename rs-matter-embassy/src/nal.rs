@@ -1,3 +1,5 @@
+//! UDP: A `UdpBind` trait implementation for `embassy-net`
+
 /// Re-export the `edge-nal-embassy` crate
 pub use edge_nal_embassy::*;
 

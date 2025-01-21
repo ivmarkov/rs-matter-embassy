@@ -1,3 +1,5 @@
+//! Wireless: Type aliases and state structs for an Embassy Matter stack running over a wireless network (Wifi or Thread) and BLE.
+
 use edge_nal_embassy::UdpBuffers;
 
 use embassy_net::StackResources;
@@ -167,6 +169,7 @@ where
     }
 }
 
+// Wifi: Type aliases and state structs for an Embassy Matter stack running over a Wifi network and BLE.
 mod wifi {
     use core::pin::pin;
 

@@ -32,6 +32,7 @@ use esp_wifi::EspWifiController;
 
 use log::info;
 
+use rs_matter_embassy::epoch::epoch;
 use rs_matter_embassy::matter::data_model::cluster_basic_information::BasicInfoConfig;
 use rs_matter_embassy::matter::data_model::cluster_on_off;
 use rs_matter_embassy::matter::data_model::device_types::DEV_TYPE_ON_OFF_LIGHT;
@@ -64,7 +65,7 @@ macro_rules! mk_static {
 
 #[esp_hal_embassy::main]
 async fn main(_s: Spawner) {
-    esp_println::logger::init_logger_from_env();
+    esp_println::logger::init_logger(log::LevelFilter::Info);
 
     info!("Starting...");
 
@@ -89,12 +90,7 @@ async fn main(_s: Spawner) {
         Mutex::new(RefCell::new(None));
     RAND.lock(|r| *r.borrow_mut() = Some(rng.clone()));
 
-    // TrouBLE needs the BLE controller to be static, which
-    // means the `EspWifiController` must be static too.
-    let init = &*mk_static!(
-        EspWifiController<'static>,
-        esp_wifi::init(timg0.timer0, rng, peripherals.RADIO_CLK,).unwrap()
-    );
+    let init = esp_wifi::init(timg0.timer0, rng, peripherals.RADIO_CLK).unwrap();
 
     #[cfg(not(feature = "esp32"))]
     {
@@ -126,7 +122,7 @@ async fn main(_s: Spawner) {
         TEST_BASIC_COMM_DATA,
         &TEST_DEV_ATT,
         MdnsType::Builtin,
-        || core::time::Duration::from_millis(embassy_time::Instant::now().as_millis()),
+        epoch,
         |buf| {
             RAND.lock(|rng| {
                 let mut rng = rng.borrow_mut();
@@ -261,7 +257,10 @@ impl<'a, 'd> rs_matter_embassy::wireless::WifiDriverProvider for WifiDriverProvi
         let (wifi_interface, controller) =
             esp_wifi::wifi::new_with_mode(self.0, &mut self.1, WifiStaDevice).unwrap();
 
-        (wifi_interface, wifi_controller::EspController(controller))
+        (
+            wifi_interface,
+            wifi_controller::EspController(controller, None),
+        )
     }
 }
 
@@ -272,14 +271,21 @@ impl<'a, 'd> rs_matter_embassy::wireless::WifiDriverProvider for WifiDriverProvi
 // Perhaps it is time to dust-off `embedded_svc::wifi` and publish it as a micro-crate?
 // `embedded-wifi`?
 mod wifi_controller {
-    use esp_wifi::wifi::WifiController;
-
-    use rs_matter_embassy::matter::error::Error;
-    use rs_matter_embassy::stack::wireless::traits::{
-        Controller, NetworkCredentials, WifiData, WirelessData,
+    use esp_wifi::wifi::{
+        AuthMethod, ClientConfiguration, Configuration, ScanConfig, WifiController,
     };
 
-    pub struct EspController<'a>(pub WifiController<'a>);
+    use rs_matter_embassy::matter::data_model::sdm::nw_commissioning::WiFiSecurity;
+    use rs_matter_embassy::matter::error::Error;
+    use rs_matter_embassy::matter::tlv::OctetsOwned;
+    use rs_matter_embassy::matter::utils::storage::Vec;
+    use rs_matter_embassy::stack::wireless::traits::{
+        Controller, NetworkCredentials, WifiData, WifiScanResult, WifiSsid, WirelessData,
+    };
+
+    const MAX_NETWORKS: usize = 3;
+
+    pub struct EspController<'a>(pub WifiController<'a>, pub Option<WifiSsid>);
 
     impl Controller for EspController<'_> {
         type Data = WifiData;
@@ -289,19 +295,62 @@ mod wifi_controller {
             network_id: Option<
                 &<<Self::Data as WirelessData>::NetworkCredentials as NetworkCredentials>::NetworkId,
             >,
-            callback: F,
+            mut callback: F,
         ) -> Result<(), Error>
         where
             F: FnMut(Option<&<Self::Data as WirelessData>::ScanResult>) -> Result<(), Error>,
         {
-            todo!()
+            let mut scan_config = ScanConfig::default();
+            if let Some(network_id) = network_id {
+                scan_config.ssid = Some(network_id.0.as_str());
+            }
+
+            let (aps, _) = self
+                .0
+                .scan_with_config_async::<MAX_NETWORKS>(scan_config)
+                .await
+                .unwrap();
+
+            for ap in aps {
+                callback(Some(&WifiScanResult {
+                    ssid: WifiSsid(ap.ssid),
+                    bssid: OctetsOwned {
+                        vec: Vec::from_slice(&ap.bssid).unwrap(),
+                    },
+                    channel: ap.channel as _,
+                    rssi: Some(ap.signal_strength),
+                    band: None,
+                    security: match ap.auth_method {
+                        Some(AuthMethod::None) => WiFiSecurity::Unencrypted,
+                        Some(AuthMethod::WEP) => WiFiSecurity::Wep,
+                        Some(AuthMethod::WPA) => WiFiSecurity::WpaPersonal,
+                        Some(AuthMethod::WPA3Personal) => WiFiSecurity::Wpa3Personal,
+                        _ => WiFiSecurity::Wpa2Personal,
+                    },
+                }))
+                .unwrap();
+            }
+
+            callback(None).unwrap();
+
+            Ok(())
         }
 
         async fn connect(
             &mut self,
             creds: &<Self::Data as WirelessData>::NetworkCredentials,
         ) -> Result<(), Error> {
-            todo!()
+            self.0
+                .set_configuration(&Configuration::Client(ClientConfiguration {
+                    ssid: creds.ssid.0.clone(),
+                    password: creds.password.clone(),
+                    ..Default::default()
+                }))
+                .unwrap();
+
+            self.0.connect_async().await.unwrap();
+
+            Ok(())
         }
 
         async fn connected_network(
@@ -312,11 +361,11 @@ mod wifi_controller {
             >,
             Error,
         > {
-            todo!()
+            Ok(self.1.clone())
         }
 
         async fn stats(&mut self) -> Result<<Self::Data as WirelessData>::Stats, Error> {
-            todo!()
+            Ok(None)
         }
     }
 }

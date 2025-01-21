@@ -1,3 +1,5 @@
+// BLE: `TroubleBtpGattPeripheral` - an implementation of the `GattPeripheral` trait from `rs-matter`.
+
 use embassy_futures::join::join;
 use embassy_futures::select::select;
 
@@ -20,7 +22,7 @@ use trouble_host::prelude::*;
 use trouble_host::{Address, BdAddr, BleHostError, Controller, Error, HostResources};
 
 const MAX_CONNECTIONS: usize = MAX_BTP_SESSIONS;
-const MAX_MTU_SIZE: usize = 27; // For now 512; // TODO const L2CAP_MTU: usize = 251;
+const MAX_MTU_SIZE: usize = 251; // For now 512; // TODO const L2CAP_MTU: usize = 251;
 const MAX_CHANNELS: usize = 2;
 const ADV_SETS: usize = 1;
 
@@ -59,9 +61,9 @@ struct Server {
 /// Matter service
 #[gatt_service(uuid = MATTER_BLE_SERVICE_UUID16)]
 struct MatterService {
-    #[characteristic(uuid = Uuid::Uuid128(C1_CHARACTERISTIC_UUID.to_be_bytes()), write)]
+    #[characteristic(uuid = Uuid::Uuid128(C1_CHARACTERISTIC_UUID.to_le_bytes()), write)]
     c1: External,
-    #[characteristic(uuid = Uuid::Uuid128(C2_CHARACTERISTIC_UUID.to_be_bytes()), write, indicate)]
+    #[characteristic(uuid = Uuid::Uuid128(C2_CHARACTERISTIC_UUID.to_le_bytes()), write, indicate)]
     c2: External,
 }
 
@@ -294,19 +296,23 @@ where
                     break;
                 }
                 ConnectionEvent::Gatt { data } => {
+                    let request = data.request();
+
+                    info!("Got GATT event: {:?}", request);
+
                     if let AttReq::Write {
                         handle,
                         data: bytes,
-                    } = data.request()
+                    } = request
                     {
                         if handle == server.matter_service.c1.handle {
+                            info!("[gatt] Write {:?} / MTU {}", bytes, conn.att_mtu());
+
                             callback(GattPeripheralEvent::Write {
                                 address: to_bt_addr(&conn.peer_address()),
                                 data: bytes,
                                 gatt_mtu: Some(conn.att_mtu()),
                             });
-
-                            info!("[gatt] Write {:?}", bytes);
 
                             data.reply(AttRsp::Write).await.unwrap();
 
@@ -318,7 +324,9 @@ where
                         Ok(Some(GattEvent::Write(event))) => {
                             if Some(event.handle()) == server.matter_service.c2.cccd_handle {
                                 let data = event.data();
-                                let subscribed = data[0] == 1;
+                                let subscribed = data[0] != 0;
+
+                                info!("[gatt] Write Event to CCC Characteristic: {:?}", data);
 
                                 if subscribed {
                                     callback(GattPeripheralEvent::NotifySubscribed(to_bt_addr(
@@ -329,8 +337,6 @@ where
                                         &conn.peer_address(),
                                     )));
                                 }
-
-                                info!("[gatt] Write Event to CCC Characteristic: {:?}", data);
                             }
                         }
                         Ok(_) => {}
