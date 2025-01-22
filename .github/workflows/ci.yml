@@ -50,6 +50,9 @@ jobs:
         run: cd examples/esp; cargo fmt -- --check
 
       - name: Examples-Build | Clippy
+        env:
+          WIFI_SSID: "ssid"
+          WIFI_PASS: "pass"
         run: cd examples/esp; cargo clippy --no-deps -- -Dwarnings
 
       - name: Examples-Build | Compile

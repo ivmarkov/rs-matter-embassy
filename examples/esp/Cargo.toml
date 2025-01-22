@@ -1,5 +1,5 @@
 [package]
-name = "rs-matter-esp32-examples"
+name = "rs-matter-embassy-esp-examples"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
