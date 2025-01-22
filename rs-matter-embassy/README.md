@@ -13,7 +13,7 @@ Everything necessary to run [`rs-matter`](https://github.com/project-chip/rs-mat
 
 ## Example
 
-(See also [All examples](#all-examples))
+(See also [All examples](examples))
 
 ```rust
 //! An example utilizing the `EmbassyWifiMatterStack` struct.
@@ -242,7 +242,3 @@ const NODE: Node = Node {
 * Device Attestation data support using secure flash storage
 * Setting system time via Matter
 * Matter OTA support
-
-## All examples
-
-Look at [this folder](examples)
