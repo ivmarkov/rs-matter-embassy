@@ -33,6 +33,7 @@ opt-level = "z"
 
 [features]
 default = ["rs-matter-stack"]
+esp = ["esp-wifi", "esp-hal"]
 
 [dependencies]
 log = { version = "0.4", default-features = false }
@@ -45,9 +46,14 @@ edge-nal-embassy = "0.5"
 embedded-storage-async = "0.4.1"
 sequential-storage = "3"
 trouble-host = { version = "0.1", git = "https://github.com/ivmarkov/trouble", branch = "const-and-others" }
+bt-hci = "0.2"
 embedded-io = "0.6"
 scopeguard = { version = "1", default-features = false }
 rs-matter = { version = "0.1", default-features = false, features = ["rustcrypto"] }
 rs-matter-stack = { git = "https://github.com/ivmarkov/rs-matter-stack", default-features = false, optional = true, features = ["rustcrypto"] }
 static_cell = "2"
 portable-atomic = { version = "1", features = ["unsafe-assume-single-core"] }
+
+# Only necessary when `rs-matter-embassy` is providing extra-sugar for the `esp32*` chips family
+esp-wifi = { version = "0.12", optional = true, features = ["wifi", "ble"] }
+esp-hal = { version = "0.23", optional = true, features = ["unstable"] }

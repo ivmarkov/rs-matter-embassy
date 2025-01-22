@@ -14,8 +14,6 @@
 use core::cell::RefCell;
 use core::pin::pin;
 
-use bt_hci::controller::ExternalController;
-
 use esp_backtrace as _;
 
 use embassy_executor::Spawner;
@@ -26,12 +24,9 @@ use embassy_time::{Duration, Timer};
 use esp_hal::rng::Rng;
 use esp_hal::{clock::CpuClock, timer::timg::TimerGroup};
 
-use esp_wifi::ble::controller::BleConnector;
-use esp_wifi::wifi::{WifiDevice, WifiStaDevice};
-use esp_wifi::EspWifiController;
-
 use log::info;
 
+use rs_matter_embassy::ble::esp::EspBleControllerProvider;
 use rs_matter_embassy::epoch::epoch;
 use rs_matter_embassy::matter::data_model::cluster_basic_information::BasicInfoConfig;
 use rs_matter_embassy::matter::data_model::cluster_on_off;
@@ -46,6 +41,7 @@ use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
 use rs_matter_embassy::stack::MdnsType;
+use rs_matter_embassy::wireless::esp::EspWifiDriverProvider;
 use rs_matter_embassy::wireless::{EmbassyBle, EmbassyWifi, EmbassyWifiMatterStack};
 
 macro_rules! mk_static {
@@ -166,9 +162,9 @@ async fn main(_s: Spawner) {
     // This step can be repeated in that the stack can be stopped and started multiple times, as needed.
     let mut matter = pin!(stack.run(
         // The Matter stack needs to instantiate an `embassy-net` `Driver` and `Controller`
-        EmbassyWifi::new(WifiDriverProvider(&init, peripherals.WIFI), stack),
+        EmbassyWifi::new(EspWifiDriverProvider::new(&init, peripherals.WIFI), stack),
         // The Matter stack needs BLE
-        EmbassyBle::new(BleControllerProvider(&init, peripherals.BT), stack),
+        EmbassyBle::new(EspBleControllerProvider::new(&init, peripherals.BT), stack),
         // The Matter stack needs a persister to store its state
         // `EmbassyPersist`+`EmbassyKvBlobStore` saves to a user-supplied NOR Flash region
         // However, for this demo and for simplicity, we use a dummy persister that does nothing
@@ -220,172 +216,3 @@ const NODE: Node = Node {
         },
     ],
 };
-
-/// If you are OK with having the BLE BTP peripheral instantiated all the time and find this too verbose, scrap it!
-/// Use `PreexistingBle::new` instead when instantiating the Matter stack.
-struct BleControllerProvider<'a, 'd>(&'a EspWifiController<'d>, esp_hal::peripherals::BT);
-
-impl rs_matter_embassy::ble::BleControllerProvider for BleControllerProvider<'_, '_> {
-    type Controller<'t>
-        = ExternalController<BleConnector<'t>, 20>
-    where
-        Self: 't;
-
-    async fn provide(&mut self) -> Self::Controller<'_> {
-        ExternalController::new(BleConnector::new(self.0, &mut self.1))
-    }
-}
-
-/// If you are OK with having Wifi running all the time and find this too verbose, scrap it!
-/// Use `PreexistingWireless::new` instead when instantiating the Matter stack.
-///
-/// Note that this won't you save much in terms of LOCs after all, as you still have to do the
-/// equivalent of `WifiDriverProvider::provide` except in your `main()` function.
-struct WifiDriverProvider<'a, 'd>(&'a EspWifiController<'d>, esp_hal::peripherals::WIFI);
-
-impl rs_matter_embassy::wireless::WifiDriverProvider for WifiDriverProvider<'_, '_> {
-    type Driver<'t>
-        = WifiDevice<'t, WifiStaDevice>
-    where
-        Self: 't;
-    type Controller<'t>
-        = wifi_controller::EspController<'t>
-    where
-        Self: 't;
-
-    async fn provide(&mut self) -> (Self::Driver<'_>, Self::Controller<'_>) {
-        let (wifi_interface, controller) =
-            esp_wifi::wifi::new_with_mode(self.0, &mut self.1, WifiStaDevice).unwrap();
-
-        (
-            wifi_interface,
-            wifi_controller::EspController(controller, None),
-        )
-    }
-}
-
-// TODO:
-// This adaptor would've not been necessary, if there was a common Wifi trait aggreed upon and
-// implemented by all MCU Wifi controllers in the field.
-//
-// Perhaps it is time to dust-off `embedded_svc::wifi` and publish it as a micro-crate?
-// `embedded-wifi`?
-mod wifi_controller {
-    use esp_wifi::wifi::{
-        AuthMethod, ClientConfiguration, Configuration, ScanConfig, WifiController, WifiError,
-    };
-
-    use rs_matter_embassy::matter::data_model::sdm::nw_commissioning::WiFiSecurity;
-    use rs_matter_embassy::matter::error::{Error, ErrorCode};
-    use rs_matter_embassy::matter::tlv::OctetsOwned;
-    use rs_matter_embassy::matter::utils::storage::Vec;
-    use rs_matter_embassy::stack::wireless::traits::{
-        Controller, NetworkCredentials, WifiData, WifiScanResult, WifiSsid, WirelessData,
-    };
-
-    const MAX_NETWORKS: usize = 3;
-
-    pub struct EspController<'a>(pub WifiController<'a>, pub Option<WifiSsid>);
-
-    impl Controller for EspController<'_> {
-        type Data = WifiData;
-
-        async fn scan<F>(
-            &mut self,
-            network_id: Option<
-                &<<Self::Data as WirelessData>::NetworkCredentials as NetworkCredentials>::NetworkId,
-            >,
-            mut callback: F,
-        ) -> Result<(), Error>
-        where
-            F: FnMut(Option<&<Self::Data as WirelessData>::ScanResult>) -> Result<(), Error>,
-        {
-            if !self.0.is_started().map_err(to_err)? {
-                self.0.start_async().await.map_err(to_err)?;
-            }
-
-            let mut scan_config = ScanConfig::default();
-            if let Some(network_id) = network_id {
-                scan_config.ssid = Some(network_id.0.as_str());
-            }
-
-            let (aps, _) = self
-                .0
-                .scan_with_config_async::<MAX_NETWORKS>(scan_config)
-                .await
-                .map_err(to_err)?;
-
-            for ap in aps {
-                callback(Some(&WifiScanResult {
-                    ssid: WifiSsid(ap.ssid),
-                    bssid: OctetsOwned {
-                        vec: Vec::from_slice(&ap.bssid).unwrap(),
-                    },
-                    channel: ap.channel as _,
-                    rssi: Some(ap.signal_strength),
-                    band: None,
-                    security: match ap.auth_method {
-                        Some(AuthMethod::None) => WiFiSecurity::Unencrypted,
-                        Some(AuthMethod::WEP) => WiFiSecurity::Wep,
-                        Some(AuthMethod::WPA) => WiFiSecurity::WpaPersonal,
-                        Some(AuthMethod::WPA3Personal) => WiFiSecurity::Wpa3Personal,
-                        _ => WiFiSecurity::Wpa2Personal,
-                    },
-                }))?;
-            }
-
-            callback(None)?;
-
-            Ok(())
-        }
-
-        async fn connect(
-            &mut self,
-            creds: &<Self::Data as WirelessData>::NetworkCredentials,
-        ) -> Result<(), Error> {
-            self.1 = None;
-
-            if self.0.is_started().map_err(to_err)? {
-                self.0.stop_async().await.map_err(to_err)?;
-            }
-
-            self.0
-                .set_configuration(&Configuration::Client(ClientConfiguration {
-                    ssid: creds.ssid.0.clone(),
-                    password: creds.password.clone(),
-                    ..Default::default()
-                }))
-                .map_err(to_err)?;
-
-            self.0.start_async().await.map_err(to_err)?;
-            self.0.connect_async().await.map_err(to_err)?;
-
-            self.1 = self
-                .0
-                .is_connected()
-                .map_err(to_err)?
-                .then_some(creds.ssid.clone());
-
-            Ok(())
-        }
-
-        async fn connected_network(
-            &mut self,
-        ) -> Result<
-            Option<
-                <<Self::Data as WirelessData>::NetworkCredentials as NetworkCredentials>::NetworkId,
-            >,
-            Error,
-        > {
-            Ok(self.1.clone())
-        }
-
-        async fn stats(&mut self) -> Result<<Self::Data as WirelessData>::Stats, Error> {
-            Ok(None)
-        }
-    }
-
-    fn to_err(_: WifiError) -> Error {
-        Error::new(ErrorCode::NoNetworkInterface)
-    }
-}

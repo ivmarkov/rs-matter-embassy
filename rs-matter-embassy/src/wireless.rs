@@ -306,4 +306,189 @@ mod wifi {
             select(&mut main, &mut run).coalesce().await
         }
     }
+
+    // TODO:
+    // This adaptor would've not been necessary, if there was a common Wifi trait aggreed upon and
+    // implemented by all MCU Wifi controllers in the field.
+    //
+    // Perhaps it is time to dust-off `embedded_svc::wifi` and publish it as a micro-crate?
+    // `embedded-wifi`?
+    #[cfg(feature = "esp")]
+    pub mod esp {
+        use esp_hal::peripheral::{Peripheral, PeripheralRef};
+        use esp_wifi::wifi::{
+            AuthMethod, ClientConfiguration, Configuration, ScanConfig, WifiController, WifiDevice,
+            WifiError, WifiStaDevice,
+        };
+
+        use crate::matter::data_model::sdm::nw_commissioning::WiFiSecurity;
+        use crate::matter::error::{Error, ErrorCode};
+        use crate::matter::tlv::OctetsOwned;
+        use crate::matter::utils::storage::Vec;
+        use crate::stack::wireless::traits::{
+            Controller, NetworkCredentials, WifiData, WifiScanResult, WifiSsid, WirelessData,
+        };
+
+        const MAX_NETWORKS: usize = 3;
+
+        /// A `WifiDriverProvider` implementation for the ESP32 family of chips.
+        pub struct EspWifiDriverProvider<'a, 'd> {
+            controller: &'a esp_wifi::EspWifiController<'d>,
+            peripheral: PeripheralRef<'d, esp_hal::peripherals::WIFI>,
+        }
+
+        impl<'a, 'd> EspWifiDriverProvider<'a, 'd> {
+            /// Create a new instance of the `Esp32WifiDriverProvider` type.
+            ///
+            /// # Arguments
+            /// - `controller` - The `esp-wifi` Wifi controller instance.
+            /// - `peripheral` - The Wifi peripheral instance.
+            pub fn new(
+                controller: &'a esp_wifi::EspWifiController<'d>,
+                peripheral: impl Peripheral<P = esp_hal::peripherals::WIFI> + 'd,
+            ) -> Self {
+                Self {
+                    controller,
+                    peripheral: peripheral.into_ref(),
+                }
+            }
+        }
+
+        impl super::WifiDriverProvider for EspWifiDriverProvider<'_, '_> {
+            type Driver<'t>
+                = WifiDevice<'t, WifiStaDevice>
+            where
+                Self: 't;
+            type Controller<'t>
+                = EspWifiController<'t>
+            where
+                Self: 't;
+
+            async fn provide(&mut self) -> (Self::Driver<'_>, Self::Controller<'_>) {
+                let (wifi_interface, controller) = esp_wifi::wifi::new_with_mode(
+                    self.controller,
+                    &mut self.peripheral,
+                    WifiStaDevice,
+                )
+                .unwrap();
+
+                (wifi_interface, EspWifiController::new(controller))
+            }
+        }
+
+        /// An adaptor from the `esp-wifi` Wifi controller API to the `rs-matter` Wifi controller API
+        pub struct EspWifiController<'a>(WifiController<'a>, Option<WifiSsid>);
+
+        impl<'a> EspWifiController<'a> {
+            /// Create a new instance of the `Esp32Controller` type.
+            ///
+            /// # Arguments
+            /// - `controller` - The `esp-wifi` Wifi controller instance.
+            pub const fn new(controller: WifiController<'a>) -> Self {
+                Self(controller, None)
+            }
+        }
+
+        impl Controller for EspWifiController<'_> {
+            type Data = WifiData;
+
+            async fn scan<F>(
+                &mut self,
+                network_id: Option<
+                    &<<Self::Data as WirelessData>::NetworkCredentials as NetworkCredentials>::NetworkId,
+                >,
+                mut callback: F,
+            ) -> Result<(), Error>
+            where
+                F: FnMut(Option<&<Self::Data as WirelessData>::ScanResult>) -> Result<(), Error>,
+            {
+                if !self.0.is_started().map_err(to_err)? {
+                    self.0.start_async().await.map_err(to_err)?;
+                }
+
+                let mut scan_config = ScanConfig::default();
+                if let Some(network_id) = network_id {
+                    scan_config.ssid = Some(network_id.0.as_str());
+                }
+
+                let (aps, _) = self
+                    .0
+                    .scan_with_config_async::<MAX_NETWORKS>(scan_config)
+                    .await
+                    .map_err(to_err)?;
+
+                for ap in aps {
+                    callback(Some(&WifiScanResult {
+                        ssid: WifiSsid(ap.ssid),
+                        bssid: OctetsOwned {
+                            vec: Vec::from_slice(&ap.bssid).unwrap(),
+                        },
+                        channel: ap.channel as _,
+                        rssi: Some(ap.signal_strength),
+                        band: None,
+                        security: match ap.auth_method {
+                            Some(AuthMethod::None) => WiFiSecurity::Unencrypted,
+                            Some(AuthMethod::WEP) => WiFiSecurity::Wep,
+                            Some(AuthMethod::WPA) => WiFiSecurity::WpaPersonal,
+                            Some(AuthMethod::WPA3Personal) => WiFiSecurity::Wpa3Personal,
+                            _ => WiFiSecurity::Wpa2Personal,
+                        },
+                    }))?;
+                }
+
+                callback(None)?;
+
+                Ok(())
+            }
+
+            async fn connect(
+                &mut self,
+                creds: &<Self::Data as WirelessData>::NetworkCredentials,
+            ) -> Result<(), Error> {
+                self.1 = None;
+
+                if self.0.is_started().map_err(to_err)? {
+                    self.0.stop_async().await.map_err(to_err)?;
+                }
+
+                self.0
+                    .set_configuration(&Configuration::Client(ClientConfiguration {
+                        ssid: creds.ssid.0.clone(),
+                        password: creds.password.clone(),
+                        ..Default::default()
+                    }))
+                    .map_err(to_err)?;
+
+                self.0.start_async().await.map_err(to_err)?;
+                self.0.connect_async().await.map_err(to_err)?;
+
+                self.1 = self
+                    .0
+                    .is_connected()
+                    .map_err(to_err)?
+                    .then_some(creds.ssid.clone());
+
+                Ok(())
+            }
+
+            async fn connected_network(
+                &mut self,
+            ) -> Result<
+                Option<
+                    <<Self::Data as WirelessData>::NetworkCredentials as NetworkCredentials>::NetworkId,
+                >,
+                Error,
+            >{
+                Ok(self.1.clone())
+            }
+
+            async fn stats(&mut self) -> Result<<Self::Data as WirelessData>::Stats, Error> {
+                Ok(None)
+            }
+        }
+
+        fn to_err(_: WifiError) -> Error {
+            Error::new(ErrorCode::NoNetworkInterface)
+        }
+    }
 }

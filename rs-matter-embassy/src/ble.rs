@@ -448,3 +448,49 @@ where
         Ok(())
     }
 }
+
+#[cfg(feature = "esp")]
+pub mod esp {
+    use bt_hci::controller::ExternalController;
+
+    use esp_hal::peripheral::{Peripheral, PeripheralRef};
+
+    use esp_wifi::ble::controller::BleConnector;
+    use esp_wifi::EspWifiController;
+
+    const SLOTS: usize = 20;
+
+    /// A `BleControllerProvider` implementation for the ESP32 family of chips.
+    pub struct EspBleControllerProvider<'a, 'd> {
+        controller: &'a EspWifiController<'d>,
+        peripheral: PeripheralRef<'d, esp_hal::peripherals::BT>,
+    }
+
+    impl<'a, 'd> EspBleControllerProvider<'a, 'd> {
+        /// Create a new instance
+        ///
+        /// # Arguments
+        /// - `controller`: The WiFi controller instance
+        /// - `peripheral`: The Bluetooth peripheral instance
+        pub fn new(
+            controller: &'a EspWifiController<'d>,
+            peripheral: impl Peripheral<P = esp_hal::peripherals::BT> + 'd,
+        ) -> Self {
+            Self {
+                controller,
+                peripheral: peripheral.into_ref(),
+            }
+        }
+    }
+
+    impl super::BleControllerProvider for EspBleControllerProvider<'_, '_> {
+        type Controller<'t>
+            = ExternalController<BleConnector<'t>, SLOTS>
+        where
+            Self: 't;
+
+        async fn provide(&mut self) -> Self::Controller<'_> {
+            ExternalController::new(BleConnector::new(self.controller, &mut self.peripheral))
+        }
+    }
+}
