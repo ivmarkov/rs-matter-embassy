@@ -14,13 +14,12 @@
 use core::cell::RefCell;
 use core::pin::pin;
 
-use esp_backtrace as _;
-
 use embassy_executor::Spawner;
 use embassy_futures::select::select;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::{Duration, Timer};
 
+use esp_backtrace as _;
 use esp_hal::rng::Rng;
 use esp_hal::{clock::CpuClock, timer::timg::TimerGroup};
 

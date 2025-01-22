@@ -47,13 +47,13 @@ jobs:
         run: cd rs-matter-embassy; cargo build
 
       - name: Examples-Build | Fmt Check
-        run: cd examples/esp32; cargo fmt -- --check
+        run: cd examples/esp; cargo fmt -- --check
 
       - name: Examples-Build | Clippy
-        run: cd examples/esp32; cargo clippy --no-deps -- -Dwarnings
+        run: cd examples/esp; cargo clippy --no-deps -- -Dwarnings
 
       - name: Examples-Build | Compile
         env:
-          WIFI_SSID: ssid
-          WIFI_PASS: pass
-        run: cd examples/esp32; cargo build
+          WIFI_SSID: "ssid"
+          WIFI_PASS: "pass"
+        run: cd examples/esp; cargo build

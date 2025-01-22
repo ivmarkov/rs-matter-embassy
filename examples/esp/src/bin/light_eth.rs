@@ -66,7 +66,6 @@ macro_rules! mk_static {
 
 #[esp_hal_embassy::main]
 async fn main(_s: Spawner) {
-    //esp_println::logger::init_logger(log::LevelFilter::Info);
     logger::init_logger(true, log::LevelFilter::Info);
 
     info!("Starting...");
