@@ -88,7 +88,7 @@ async fn main(_s: Spawner) {
     // so we need to store the `Rng` in a global variable
     static RAND: Mutex<CriticalSectionRawMutex, RefCell<Option<Rng>>> =
         Mutex::new(RefCell::new(None));
-    RAND.lock(|r| *r.borrow_mut() = Some(rng.clone()));
+    RAND.lock(|r| *r.borrow_mut() = Some(rng));
 
     let init = esp_wifi::init(timg0.timer0, rng, peripherals.RADIO_CLK).unwrap();
 
@@ -166,9 +166,9 @@ async fn main(_s: Spawner) {
     // This step can be repeated in that the stack can be stopped and started multiple times, as needed.
     let mut matter = pin!(stack.run(
         // The Matter stack needs to instantiate an `embassy-net` `Driver` and `Controller`
-        EmbassyWifi::new(WifiDriverProvider(&init, peripherals.WIFI), &stack),
+        EmbassyWifi::new(WifiDriverProvider(&init, peripherals.WIFI), stack),
         // The Matter stack needs BLE
-        EmbassyBle::new(BleControllerProvider(&init, peripherals.BT), &stack),
+        EmbassyBle::new(BleControllerProvider(&init, peripherals.BT), stack),
         // The Matter stack needs a persister to store its state
         // `EmbassyPersist`+`EmbassyKvBlobStore` saves to a user-supplied NOR Flash region
         // However, for this demo and for simplicity, we use a dummy persister that does nothing
@@ -225,7 +225,7 @@ const NODE: Node = Node {
 /// Use `PreexistingBle::new` instead when instantiating the Matter stack.
 struct BleControllerProvider<'a, 'd>(&'a EspWifiController<'d>, esp_hal::peripherals::BT);
 
-impl<'a, 'd> rs_matter_embassy::ble::BleControllerProvider for BleControllerProvider<'a, 'd> {
+impl rs_matter_embassy::ble::BleControllerProvider for BleControllerProvider<'_, '_> {
     type Controller<'t>
         = ExternalController<BleConnector<'t>, 20>
     where
@@ -243,7 +243,7 @@ impl<'a, 'd> rs_matter_embassy::ble::BleControllerProvider for BleControllerProv
 /// equivalent of `WifiDriverProvider::provide` except in your `main()` function.
 struct WifiDriverProvider<'a, 'd>(&'a EspWifiController<'d>, esp_hal::peripherals::WIFI);
 
-impl<'a, 'd> rs_matter_embassy::wireless::WifiDriverProvider for WifiDriverProvider<'a, 'd> {
+impl rs_matter_embassy::wireless::WifiDriverProvider for WifiDriverProvider<'_, '_> {
     type Driver<'t>
         = WifiDevice<'t, WifiStaDevice>
     where

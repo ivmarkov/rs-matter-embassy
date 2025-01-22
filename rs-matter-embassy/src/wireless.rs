@@ -1,9 +1,12 @@
 //! Wireless: Type aliases and state structs for an Embassy Matter stack running over a wireless network (Wifi or Thread) and BLE.
 
+use core::mem::MaybeUninit;
+
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 
 use rs_matter_stack::matter::error::Error;
 use rs_matter_stack::matter::utils::init::{init, Init};
+use rs_matter_stack::matter::utils::rand::Rand;
 use rs_matter_stack::matter::utils::sync::IfMutex;
 use rs_matter_stack::network::{Embedding, Network};
 use rs_matter_stack::persist::KvBlobBuf;
@@ -58,7 +61,7 @@ where
     fn init() -> impl Init<Self> {
         init!(Self {
             btp_gatt_context <- TroubleBtpGattContext::init(),
-            enet_context: EmbassyNetContext::new(),
+            enet_context <- EmbassyNetContext::init(),
             embedding <- E::init(),
         })
     }
@@ -101,6 +104,15 @@ impl EmbassyNetContext {
             resources: IfMutex::new(MatterStackResources::new()),
         }
     }
+
+    pub fn init() -> impl Init<Self> {
+        init!(Self {
+            // TODO: Implement init constructor for `UdpBuffers`
+            buffers: MatterUdpBuffers::new(),
+            // Note: below will break if `HostResources` stops being a bunch of `MaybeUninit`s
+            resources <- IfMutex::init(unsafe { MaybeUninit::<MatterStackResources>::uninit().assume_init() }),
+        })
+    }
 }
 
 impl Default for EmbassyNetContext {
@@ -111,6 +123,7 @@ impl Default for EmbassyNetContext {
 
 pub struct EmbassyBle<'a, T> {
     provider: T,
+    rand: Rand,
     context: &'a TroubleBtpGattContext<CriticalSectionRawMutex>,
 }
 
@@ -125,6 +138,7 @@ where
     {
         Self::wrap(
             provider,
+            stack.matter().rand(),
             stack.network().embedding().embedding().ble_context(),
         )
     }
@@ -132,9 +146,14 @@ where
     /// Wrap the `EmbassyWifi` type around a Wifi driver provider and a network context.
     pub const fn wrap(
         provider: T,
+        rand: Rand,
         context: &'a TroubleBtpGattContext<CriticalSectionRawMutex>,
     ) -> Self {
-        Self { provider, context }
+        Self {
+            provider,
+            rand,
+            context,
+        }
     }
 }
 
@@ -146,7 +165,7 @@ where
     where
         A: BleTask,
     {
-        let peripheral = TroubleBtpGattPeripheral::new(&mut self.provider, self.context);
+        let peripheral = TroubleBtpGattPeripheral::new(&mut self.provider, self.rand, self.context);
 
         task.run(peripheral).await
     }

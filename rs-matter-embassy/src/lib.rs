@@ -4,7 +4,7 @@
 #![allow(renamed_and_removed_lints)]
 #![allow(clippy::declare_interior_mutable_const)]
 #![warn(clippy::large_futures)]
-#![warn(clippy::large_stack_frames)]
+//#![warn(clippy::large_stack_frames)]
 #![warn(clippy::large_types_passed_by_value)]
 
 #[cfg(feature = "rs-matter-stack")]

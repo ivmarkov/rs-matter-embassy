@@ -28,13 +28,8 @@ impl<'d> EmbassyNetif<'d> {
     }
 
     fn get_conf(&self) -> Option<NetifConf> {
-        let Some(v4) = self.stack.config_v4() else {
-            return None;
-        };
-
-        let Some(v6) = self.stack.config_v6() else {
-            return None;
-        };
+        let v4 = self.stack.config_v4()?;
+        let v6 = self.stack.config_v6()?;
 
         let conf = NetifConf {
             ipv4: v4.address.address(),

@@ -36,11 +36,11 @@ const MAX_SOCKETS: usize = 2;
 const MAX_META_DATA: usize = 4;
 
 /// Create an `embassy-net` stack suitable for the `rs-matter` stack
-pub fn create_net_stack<'d, const N: usize, D: Driver>(
+pub fn create_net_stack<const N: usize, D: Driver>(
     driver: D,
     seed: u64,
-    resources: &'d mut StackResources<N>,
-) -> (Stack<'d>, Runner<'d, D>) {
+    resources: &mut StackResources<N>,
+) -> (Stack<'_>, Runner<'_, D>) {
     let config = create_net_config(&driver);
 
     net::new(driver, config, resources, seed)

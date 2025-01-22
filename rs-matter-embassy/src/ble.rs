@@ -1,5 +1,9 @@
 // BLE: `TroubleBtpGattPeripheral` - an implementation of the `GattPeripheral` trait from `rs-matter`.
 
+#![allow(clippy::useless_conversion)] // https://github.com/embassy-rs/trouble/issues/248
+
+use core::mem::MaybeUninit;
+
 use embassy_futures::join::join;
 use embassy_futures::select::select;
 
@@ -14,12 +18,13 @@ use rs_matter_stack::matter::transport::network::btp::{
 };
 use rs_matter_stack::matter::transport::network::BtAddr;
 use rs_matter_stack::matter::utils::init::{init, Init};
+use rs_matter_stack::matter::utils::rand::Rand;
 use rs_matter_stack::matter::utils::storage::Vec;
 use rs_matter_stack::matter::utils::sync::IfMutex;
 
 use trouble_host::att::{AttReq, AttRsp};
 use trouble_host::prelude::*;
-use trouble_host::{self, Address, BdAddr, BleHostError, Controller, HostResources};
+use trouble_host::{self, Address, BleHostError, Controller, HostResources};
 
 const MAX_CONNECTIONS: usize = MAX_BTP_SESSIONS;
 const MAX_MTU_SIZE: usize = 251; // For now 512; // TODO const L2CAP_MTU: usize = 251;
@@ -27,8 +32,6 @@ const MAX_CHANNELS: usize = 2;
 const ADV_SETS: usize = 1;
 
 pub type GPHostResources = HostResources<MAX_CONNECTIONS, MAX_CHANNELS, MAX_MTU_SIZE, ADV_SETS>;
-
-type External = [u8; 0];
 
 pub trait BleControllerProvider {
     type Controller<'a>: Controller
@@ -51,6 +54,8 @@ where
         (*self).provide().await
     }
 }
+
+type External = [u8; 0];
 
 // GATT Server definition
 #[gatt_server]
@@ -120,7 +125,8 @@ where
     pub fn init() -> impl Init<Self> {
         init!(Self {
             ind <- IfMutex::init(IndBuffer::init()),
-            resources: IfMutex::new(GPHostResources::new()), // TODO: Init
+            // Note: below will break if `HostResources` stops being a bunch of `MaybeUninit`s
+            resources <- IfMutex::init(unsafe { MaybeUninit::<GPHostResources>::uninit().assume_init() }),
         })
     }
 
@@ -155,9 +161,10 @@ where
     M: RawMutex,
     C: BleControllerProvider,
 {
-    // TODO: IDeally this should be the controller itself, but this is not possible
+    // TODO: Ideally this should be the controller itself, but this is not possible
     // until `bt-hci` is updated with `impl<C: Controller>` Controller for &C {}`
     provider: IfMutex<M, C>,
+    rand: Rand,
     context: &'a TroubleBtpGattContext<M>,
 }
 
@@ -170,9 +177,10 @@ where
     ///
     /// Creation might fail if the GATT context cannot be reset, so user should ensure
     /// that there are no other GATT peripherals running before calling this function.
-    pub const fn new(provider: C, context: &'a TroubleBtpGattContext<M>) -> Self {
+    pub const fn new(provider: C, rand: Rand, context: &'a TroubleBtpGattContext<M>) -> Self {
         Self {
             provider: IfMutex::new(provider),
+            rand,
             context,
         }
     }
@@ -194,12 +202,19 @@ where
 
         let controller = provider.provide().await;
 
-        let address = Address::random([0x41, 0x5A, 0xE3, 0x1E, 0x83, 0xE7]); // TODO
-        info!("Our address = {:?}", address);
+        let mut address = [0; 6];
+        (self.rand)(&mut address);
+
+        let address = Address::random(address);
+        info!("GATT address = {:?}", address);
 
         let stack = trouble_host::new(controller, &mut resources).set_random_address(address);
 
-        let (mut peripheral, _, runner) = stack.build();
+        let Host {
+            mut peripheral,
+            runner,
+            ..
+        } = stack.build();
 
         let server = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
             name: "TrouBLE",                                             // TODO

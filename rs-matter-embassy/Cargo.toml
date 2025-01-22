@@ -17,6 +17,8 @@ harness = false
 
 #[patch.'https://github.com/ivmarkov/rs-matter-stack']
 #rs-matter-stack = { path = "../../rs-matter-stack" }
+#[patch.'https://github.com/ivmarkov/trouble']
+#trouble-host = { version = "0.1", path = "../../trouble/host" }
 
 [patch.crates-io]
 #rs-matter = { git = "https://github.com/project-chip/rs-matter" }
@@ -42,8 +44,7 @@ embassy-net = { version = "0.6", features = ["proto-ipv4", "proto-ipv6", "multic
 edge-nal-embassy = "0.5"
 embedded-storage-async = "0.4.1"
 sequential-storage = "3"
-#trouble-host = { version = "0.1", git = "https://github.com/ivmarkov/trouble", branch = "const-and-others" }
-trouble-host = { version = "0.1", path = "../../trouble/host" }
+trouble-host = { version = "0.1", git = "https://github.com/ivmarkov/trouble", branch = "const-and-others" }
 embedded-io = "0.6"
 scopeguard = { version = "1", default-features = false }
 rs-matter = { version = "0.1", default-features = false, features = ["rustcrypto"] }

@@ -90,7 +90,7 @@ async fn main(_s: Spawner) {
     // so we need to store the `Rng` in a global variable
     static RAND: Mutex<CriticalSectionRawMutex, RefCell<Option<Rng>>> =
         Mutex::new(RefCell::new(None));
-    RAND.lock(|r| *r.borrow_mut() = Some(rng.clone()));
+    RAND.lock(|r| *r.borrow_mut() = Some(rng));
 
     let init = esp_wifi::init(timg0.timer0, rng, peripherals.RADIO_CLK).unwrap();
 
@@ -215,6 +215,7 @@ async fn main(_s: Spawner) {
         connection(controller).into_fallible(),
         async {
             net_runner.run().await;
+            #[allow(unreachable_code)]
             Ok(())
         },
     )
@@ -227,13 +228,10 @@ async fn connection(mut controller: WifiController<'_>) {
     info!("start connection task");
     info!("Device capabilities: {:?}", controller.capabilities());
     loop {
-        match esp_wifi::wifi::wifi_state() {
-            WifiState::StaConnected => {
-                // wait until we're no longer connected
-                controller.wait_for_event(WifiEvent::StaDisconnected).await;
-                Timer::after(Duration::from_millis(5000)).await
-            }
-            _ => {}
+        if esp_wifi::wifi::wifi_state() == WifiState::StaConnected {
+            // wait until we're no longer connected
+            controller.wait_for_event(WifiEvent::StaDisconnected).await;
+            Timer::after(Duration::from_millis(5000)).await
         }
         if !matches!(controller.is_started(), Ok(true)) {
             let client_config = Configuration::Client(ClientConfiguration {
