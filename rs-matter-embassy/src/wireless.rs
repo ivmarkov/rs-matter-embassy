@@ -92,12 +92,14 @@ where
     }
 }
 
+/// A context (storage) for the network layer of the Matter stack.
 pub struct EmbassyNetContext {
     buffers: MatterUdpBuffers,
     resources: IfMutex<CriticalSectionRawMutex, MatterStackResources>,
 }
 
 impl EmbassyNetContext {
+    /// Create a new instance of the `EmbassyNetContext` type.
     pub const fn new() -> Self {
         Self {
             buffers: MatterUdpBuffers::new(),
@@ -105,6 +107,7 @@ impl EmbassyNetContext {
         }
     }
 
+    /// Return an in-place initializer for the `EmbassyNetContext` type.
     pub fn init() -> impl Init<Self> {
         init!(Self {
             // TODO: Implement init constructor for `UdpBuffers`
@@ -121,6 +124,7 @@ impl Default for EmbassyNetContext {
     }
 }
 
+/// A `Ble` trait implementation for `trouble`'s BLE stack
 pub struct EmbassyBle<'a, T> {
     provider: T,
     rand: Rand,
@@ -131,7 +135,7 @@ impl<'a, T> EmbassyBle<'a, T>
 where
     T: BleControllerProvider,
 {
-    /// Create a new instance of the `EmbassyWifi` type.
+    /// Create a new instance of the `EmbassyBle` type.
     pub fn new<E>(provider: T, stack: &'a EmbassyWifiMatterStack<'a, E>) -> Self
     where
         E: Embedding + 'static,
@@ -143,7 +147,7 @@ where
         )
     }
 
-    /// Wrap the `EmbassyWifi` type around a Wifi driver provider and a network context.
+    /// Wrap the `EmbassyBle` type around a BLE controller provider and a trouble BTP GATT context.
     pub const fn wrap(
         provider: T,
         rand: Rand,
@@ -204,6 +208,7 @@ mod wifi {
     /// Note that Alexa does not (yet) work with non-concurrent commissioning.
     pub type EmbassyWifiNCMatterStack<'a, E> = EmbassyWirelessMatterStack<'a, Wifi<NC>, E>;
 
+    /// A companion trait of `EmbassyWifi` for providing a Wifi driver and controller.
     pub trait WifiDriverProvider {
         type Driver<'a>: embassy_net::driver::Driver
         where
@@ -212,6 +217,7 @@ mod wifi {
         where
             Self: 'a;
 
+        /// Provide a Wifi driver and controller by creating these when the Matter stack needs them
         async fn provide(&mut self) -> (Self::Driver<'_>, Self::Controller<'_>);
     }
 

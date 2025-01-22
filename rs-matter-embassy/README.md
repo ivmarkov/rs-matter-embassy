@@ -8,12 +8,8 @@
 ## Overview
 
 Everything necessary to run [`rs-matter`](https://github.com/project-chip/rs-matter) with Embassy:
-* Implementation of `rs-matter`'s `GattPeripheral` for BLE comissioning support - based on [`trouble`](https://github.com/embassy-rs/trouble).
-* [`rs-matter-stack`](https://github.com/ivmarkov/rs-matter-stack) traits support:
-  * `Netif` - Implementation based on [`embassy-net`](https://github.com/embassy-rs/embassy/tree/main/embassy-net)
-  * `Ble` - Based on [`trouble`](https://github.com/embassy-rs/trouble), as mentioned
-  * `Wireless` - TBD - custom implementations for each MCU
-  * `KvBlobStore` - [`sequential-storage`](https://github.com/tweedegolf/sequential-storage)
+* Implementation of `rs-matter`'s `GattPeripheral` for BLE comissioning support based on [`trouble`](https://github.com/embassy-rs/trouble).
+* [`rs-matter-stack`](https://github.com/ivmarkov/rs-matter-stack) support with `Netif`, `Ble`, `Wireless` and `KvBlobStore` implementations.
 
 ## Example
 

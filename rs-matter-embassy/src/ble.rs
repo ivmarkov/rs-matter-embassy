@@ -33,11 +33,14 @@ const ADV_SETS: usize = 1;
 
 pub type GPHostResources = HostResources<MAX_CONNECTIONS, MAX_CHANNELS, MAX_MTU_SIZE, ADV_SETS>;
 
+/// A companion trait of `EmbassyBle` for providing a BLE controller.
+// TODO: Move to `wireless` once https://github.com/embassy-rs/bt-hci/issues/32 is resolved
 pub trait BleControllerProvider {
     type Controller<'a>: Controller
     where
         Self: 'a;
 
+    /// Provide a BLE controller by creating it when the Matter stack needs it
     async fn provide(&mut self) -> Self::Controller<'_>;
 }
 
@@ -177,6 +180,7 @@ where
     ///
     /// Creation might fail if the GATT context cannot be reset, so user should ensure
     /// that there are no other GATT peripherals running before calling this function.
+    // TODO: change `provider` to `controller` once https://github.com/embassy-rs/bt-hci/issues/32 is resolved
     pub const fn new(provider: C, rand: Rand, context: &'a TroubleBtpGattContext<M>) -> Self {
         Self {
             provider: IfMutex::new(provider),
@@ -299,13 +303,13 @@ where
                     callback(GattPeripheralEvent::NotifyUnsubscribed(to_bt_addr(
                         &conn.peer_address(),
                     )));
-                    info!("[gatt] disconnected: {:?}", reason);
+                    info!("GATT: Disconnected: {:?}", reason);
                     break;
                 }
                 ConnectionEvent::Gatt { data } => {
                     let request = data.request();
 
-                    info!("Got GATT event: {:?}", request);
+                    info!("GATT: Got event: {:?}", request);
 
                     if let AttReq::Write {
                         handle,
@@ -313,7 +317,7 @@ where
                     } = request
                     {
                         if handle == server.matter_service.c1.handle {
-                            info!("[gatt] Write {:?} / MTU {}", bytes, conn.att_mtu());
+                            info!("GATT: Write {:?} / MTU {}", bytes, conn.att_mtu());
 
                             callback(GattPeripheralEvent::Write {
                                 address: to_bt_addr(&conn.peer_address()),
@@ -333,7 +337,7 @@ where
                                 let data = event.data();
                                 let subscribed = data[0] != 0;
 
-                                info!("[gatt] Write Event to CCC Characteristic: {:?}", data);
+                                info!("GATT: Write Event to CCC Characteristic: {:?}", data);
 
                                 if subscribed {
                                     callback(GattPeripheralEvent::NotifySubscribed(to_bt_addr(
@@ -348,13 +352,15 @@ where
                         }
                         Ok(_) => {}
                         Err(e) => {
-                            warn!("[gatt] error processing event: {:?}", e);
+                            warn!("GATT: Error processing event: {:?}", e);
                         }
                     }
                 }
             }
         }
-        info!("[gatt] task finished");
+
+        info!("GATT: Task finished");
+
         Ok(())
     }
 
@@ -392,9 +398,13 @@ where
                 },
             )
             .await?;
-        info!("[adv] advertising");
+
+        info!("GATT: Advertising");
+
         let conn = advertiser.accept().await?;
-        info!("[adv] connection established");
+
+        info!("GATT: Connection established");
+
         Ok(conn)
     }
 
