@@ -40,14 +40,17 @@ jobs:
       - name: Build | Fmt Check
         run: cd rs-matter-embassy; cargo fmt -- --check
 
-#      - name: Build | Clippy
-#        run: cd rs-matter-embassy; cargo clippy --no-deps -- -Dwarnings
+      - name: Build | Clippy
+        run: cd rs-matter-embassy; cargo clippy --no-deps -- -Dwarnings
 
       - name: Build | Compile
         run: cd rs-matter-embassy; cargo build
 
-#      - name: Build | Examples
-#        env:
-#          WIFI_SSID: "ssid"
-#          WIFI_PASS: "pass"
-#        run: cargo build --examples --features examples
+      - name: Examples-Build | Fmt Check
+        run: cd examples/esp32; cargo fmt -- --check
+
+      - name: Examples-Build | Clippy
+        run: cd examples/esp32; cargo clippy --no-deps -- -Dwarnings
+
+      - name: Examples-Build | Compile
+        run: cd examples/esp32; cargo build
