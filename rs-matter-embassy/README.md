@@ -21,9 +21,9 @@ Everything necessary to run [`rs-matter`](https://github.com/project-chip/rs-mat
 //! As the name suggests, this Matter stack assembly uses Wifi as the main transport,
 //! and thus BLE for commissioning.
 //!
-//! If you want to use Ethernet, utilize `EspEthMatterStack` instead.
+//! If you want to use Ethernet, utilize `EmbassyEthMatterStack` instead.
 //! If you want to use non-concurrent commissioning, utilize `EmbassyWifiNCMatterStack` instead
-//! (Alexa does not work (yet) with non-concurrent commissioning).
+//! (Note: Alexa does not work (yet) with non-concurrent commissioning.)
 //!
 //! The example implements a fictitious Light device (an On-Off Matter cluster).
 #![no_std]
