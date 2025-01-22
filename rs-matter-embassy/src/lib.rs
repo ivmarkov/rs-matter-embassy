@@ -19,6 +19,7 @@ pub mod nal;
 pub mod netif;
 #[cfg(feature = "rs-matter-stack")]
 pub mod persist;
+pub mod rand;
 #[cfg(feature = "rs-matter-stack")]
 pub mod stack;
 #[cfg(feature = "rs-matter-stack")]

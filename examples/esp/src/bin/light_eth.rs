@@ -9,17 +9,14 @@
 #![no_std]
 #![no_main]
 
-use core::cell::RefCell;
 use core::env;
 use core::pin::pin;
 
 use embassy_executor::Spawner;
 use embassy_futures::select::select4;
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::{Duration, Timer};
 
 use esp_backtrace as _;
-use esp_hal::rng::Rng;
 use esp_hal::{clock::CpuClock, timer::timg::TimerGroup};
 use esp_wifi::wifi::{
     ClientConfiguration, Configuration, WifiController, WifiEvent, WifiStaDevice, WifiState,
@@ -35,9 +32,9 @@ use rs_matter_embassy::matter::data_model::objects::{Dataver, Endpoint, HandlerC
 use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
-use rs_matter_embassy::matter::utils::sync::blocking::Mutex;
 use rs_matter_embassy::nal::{create_net_stack, MatterStackResources, MatterUdpBuffers, Udp};
 use rs_matter_embassy::netif::EmbassyNetif;
+use rs_matter_embassy::rand::esp::{esp_init_rand, esp_rand};
 use rs_matter_embassy::stack::persist::DummyPersist;
 use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
@@ -85,11 +82,9 @@ async fn main(_s: Spawner) {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let mut rng = esp_hal::rng::Rng::new(peripherals.RNG);
 
-    // ... To erase generics, `Matter` takes a rand `fn` rather than a trait or a closure,
-    // so we need to store the `Rng` in a global variable
-    static RAND: Mutex<CriticalSectionRawMutex, RefCell<Option<Rng>>> =
-        Mutex::new(RefCell::new(None));
-    RAND.lock(|r| *r.borrow_mut() = Some(rng));
+    // To erase generics, `Matter` takes a rand `fn` rather than a trait or a closure,
+    // so we need to initialize the global `rand` fn once
+    esp_init_rand(rng);
 
     let init = esp_wifi::init(timg0.timer0, rng, peripherals.RADIO_CLK).unwrap();
 
@@ -120,14 +115,7 @@ async fn main(_s: Spawner) {
         &TEST_DEV_ATT,
         MdnsType::Builtin,
         epoch,
-        |buf| {
-            RAND.lock(|rng| {
-                let mut rng = rng.borrow_mut();
-
-                buf.iter_mut()
-                    .for_each(|byte| *byte = rng.as_mut().unwrap().random() as _);
-            })
-        },
+        esp_rand,
     ));
 
     // Configure and start the Wifi first
