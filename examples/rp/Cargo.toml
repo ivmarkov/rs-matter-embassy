@@ -1,0 +1,52 @@
+[package]
+name = "rs-matter-embassy-rp-examples"
+version = "0.1.0"
+edition = "2021"
+resolver = "2"
+
+[[bin]]
+name = "light"
+harness = false
+
+#[patch.'https://github.com/ivmarkov/rs-matter-stack']
+#rs-matter-stack = { path = "../../../rs-matter-stack" }
+
+[patch.crates-io]
+#rs-matter = { git = "https://github.com/project-chip/rs-matter" }
+rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "pase-breaks-provisioning" }
+
+[dependencies]
+embassy-executor = { version = "0.7", default-features = false, features = ["task-arena-size-98304", "arch-cortex-m", "executor-thread", "defmt", "executor-interrupt"] }
+embassy-time = { version = "0.4.0", default-features = false, features = ["defmt", "defmt-timestamp-uptime"] }
+embassy-rp = { version = "0.3.0", features = ["defmt", "unstable-pac", "time-driver", "critical-section-impl", "rp2040"] }
+embassy-futures = "0.1.1"
+embassy-sync = { version = "0.6", features = ["defmt"] }
+
+futures = { version = "0.3", default-features = false, features = ["async-await"]}
+bt-hci = { version = "0.2", default-features = false, features = ["defmt"] }
+#trouble-example-apps = { version = "0.1.0", path = "../apps", features = ["defmt"] }
+cyw43 = { version = "0.3.0", features = ["defmt", "firmware-logs", "bluetooth"] }
+cyw43-pio = { version = "0.3.0", features = ["defmt"] }
+rs-matter-embassy = { path = "../../rs-matter-embassy", features = ["rp"] }
+embedded-alloc = "0.6"
+
+defmt = "0.3"
+defmt-rtt = "0.4.0"
+
+cortex-m = { version = "0.7.6" }
+cortex-m-rt = "0.7.0"
+panic-probe = { version = "0.3", features = ["print-defmt"] }
+static_cell = "2"
+portable-atomic = { version = "1.5", features = ["critical-section"] }
+
+[build-dependencies]
+reqwest = { version = "0.12.9", features = ["blocking"]}
+
+[features]
+skip-cyw43-firmware = []
+
+[profile.dev]
+opt-level = "z"
+
+[profile.release]
+debug = 2

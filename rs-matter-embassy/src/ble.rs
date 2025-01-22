@@ -2,12 +2,19 @@
 
 #![allow(clippy::useless_conversion)] // https://github.com/embassy-rs/trouble/issues/248
 
+use core::future::Future;
 use core::mem::MaybeUninit;
+
+use bt_hci::cmd::{AsyncCmd, SyncCmd};
+use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
+use bt_hci::data::{AclPacket, IsoPacket, SyncPacket};
+use bt_hci::ControllerToHostPacket;
 
 use embassy_futures::join::join;
 use embassy_futures::select::select;
-
 use embassy_sync::blocking_mutex::raw::RawMutex;
+
+use embedded_io::ErrorType;
 
 use log::{info, warn};
 
@@ -55,6 +62,19 @@ where
 
     async fn provide(&mut self) -> Self::Controller<'_> {
         (*self).provide().await
+    }
+}
+
+pub struct Preexisting<C>(pub C);
+
+impl<C> BleControllerProvider for Preexisting<C>
+where
+    C: Controller,
+{
+    type Controller<'a> = ControllerRef<'a, C> where Self: 'a;
+
+    async fn provide(&mut self) -> Self::Controller<'_> {
+        ControllerRef::new(&self.0)
     }
 }
 
@@ -162,11 +182,11 @@ where
 pub struct TroubleBtpGattPeripheral<'a, M, C>
 where
     M: RawMutex,
-    C: BleControllerProvider,
+    C: Controller,
 {
     // TODO: Ideally this should be the controller itself, but this is not possible
     // until `bt-hci` is updated with `impl<C: Controller>` Controller for &C {}`
-    provider: IfMutex<M, C>,
+    controller: IfMutex<M, C>,
     rand: Rand,
     context: &'a TroubleBtpGattContext<M>,
 }
@@ -174,16 +194,16 @@ where
 impl<'a, M, C> TroubleBtpGattPeripheral<'a, M, C>
 where
     M: RawMutex,
-    C: BleControllerProvider,
+    C: Controller,
 {
     /// Create a new instance.
     ///
     /// Creation might fail if the GATT context cannot be reset, so user should ensure
     /// that there are no other GATT peripherals running before calling this function.
     // TODO: change `provider` to `controller` once https://github.com/embassy-rs/bt-hci/issues/32 is resolved
-    pub const fn new(provider: C, rand: Rand, context: &'a TroubleBtpGattContext<M>) -> Self {
+    pub const fn new(controller: C, rand: Rand, context: &'a TroubleBtpGattContext<M>) -> Self {
         Self {
-            provider: IfMutex::new(provider),
+            controller: IfMutex::new(controller),
             rand,
             context,
         }
@@ -201,10 +221,10 @@ where
     {
         info!("Starting advertising and GATT service");
 
-        let mut provider = self.provider.lock().await;
+        let controller = self.controller.lock().await;
         let mut resources = self.context.resources.lock().await;
 
-        let controller = provider.provide().await;
+        let controller = ControllerRef::new(&*controller);
 
         let mut address = [0; 6];
         (self.rand)(&mut address);
@@ -429,7 +449,7 @@ where
 impl<M, C> GattPeripheral for TroubleBtpGattPeripheral<'_, M, C>
 where
     M: RawMutex,
-    C: BleControllerProvider,
+    C: Controller,
 {
     async fn run<F>(&self, service_name: &str, adv_data: &AdvData, callback: F) -> Result<(), Error>
     where
@@ -446,6 +466,99 @@ where
         TroubleBtpGattPeripheral::indicate(self, data, address).await;
 
         Ok(())
+    }
+}
+
+pub struct ControllerRef<'a, C>(&'a C);
+
+impl<'a, C> ControllerRef<'a, C> {
+    pub const fn new(controller: &'a C) -> Self {
+        Self(controller)
+    }
+}
+
+impl<C> ErrorType for ControllerRef<'_, C>
+where
+    C: ErrorType,
+{
+    type Error = C::Error;
+}
+
+impl<C> bt_hci::controller::Controller for ControllerRef<'_, C>
+where
+    C: bt_hci::controller::Controller,
+{
+    fn write_acl_data(&self, packet: &AclPacket) -> impl Future<Output = Result<(), Self::Error>> {
+        self.0.write_acl_data(packet)
+    }
+
+    fn write_sync_data(&self, packet: &SyncPacket) -> impl Future<Output = Result<(), Self::Error>> {
+        self.0.write_sync_data(packet)
+    }
+
+    fn write_iso_data(&self, packet: &IsoPacket) -> impl Future<Output = Result<(), Self::Error>> {
+        self.0.write_iso_data(packet)
+    }
+
+    fn read<'a>(&self, buf: &'a mut [u8]) -> impl Future<Output = Result<ControllerToHostPacket<'a>, Self::Error>> {
+        self.0.read(buf)
+    }
+}
+
+impl<C> bt_hci::controller::blocking::Controller for ControllerRef<'_, C>
+where
+    C: bt_hci::controller::blocking::Controller,
+{
+    fn write_acl_data(&self, packet: &AclPacket) -> Result<(), Self::Error> {
+        self.0.write_acl_data(packet)
+    }
+
+    fn write_sync_data(&self, packet: &SyncPacket) -> Result<(), Self::Error> {
+        self.0.write_sync_data(packet)
+    }
+
+    fn write_iso_data(&self, packet: &IsoPacket) -> Result<(), Self::Error> {
+        self.0.write_iso_data(packet)
+    }
+
+    fn try_write_acl_data(&self, packet: &AclPacket) -> Result<(), bt_hci::controller::blocking::TryError<Self::Error>> {
+        self.0.try_write_acl_data(packet)
+    }
+
+    fn try_write_sync_data(&self, packet: &SyncPacket) -> Result<(), bt_hci::controller::blocking::TryError<Self::Error>> {
+        self.0.try_write_sync_data(packet)
+    }
+
+    fn try_write_iso_data(&self, packet: &IsoPacket) -> Result<(), bt_hci::controller::blocking::TryError<Self::Error>> {
+        self.0.try_write_iso_data(packet)
+    }
+
+    fn read<'a>(&self, buf: &'a mut [u8]) -> Result<ControllerToHostPacket<'a>, Self::Error> {
+        self.0.read(buf)
+    }
+
+    fn try_read<'a>(&self, buf: &'a mut [u8]) -> Result<ControllerToHostPacket<'a>, bt_hci::controller::blocking::TryError<Self::Error>> {
+        self.0.try_read(buf)
+    }
+}
+
+impl<C, Q> ControllerCmdSync<Q> for ControllerRef<'_, C>
+where
+    C: ControllerCmdSync<Q>,
+    Q: SyncCmd + ?Sized,
+{
+    fn exec(&self, cmd: &Q) -> impl Future<Output = Result<Q::Return, bt_hci::cmd::Error<Self::Error>>> {
+        self.0.exec(cmd)
+    }
+}
+
+impl<C, Q> ControllerCmdAsync<Q> for ControllerRef<'_, C>
+where
+    C: ControllerCmdAsync<Q>,
+    Q: AsyncCmd + ?Sized,
+{
+    fn exec(&self, cmd: &Q) -> impl Future<Output = Result<(), bt_hci::cmd::Error<Self::Error>>> {
+        self.0.exec(cmd)
     }
 }
 

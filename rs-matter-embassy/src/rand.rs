@@ -26,3 +26,15 @@ pub mod esp {
         })
     }
 }
+
+#[cfg(feature = "rp")]
+pub mod rp {
+    use embassy_rp::clocks::RoscRng;
+
+    pub fn rp_rand(buf: &mut [u8]) {
+        use rand_core::RngCore;
+        
+        let mut rng = RoscRng;
+        rng.fill_bytes(buf);
+    }
+}
