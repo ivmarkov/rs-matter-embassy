@@ -138,7 +138,7 @@ async fn main(_s: Spawner) {
 
     let (net_stack, mut net_runner) = create_net_stack(
         wifi_interface,
-        (rng.random() as u64) << 32 | rng.random() as u64,
+        ((rng.random() as u64) << 32) | rng.random() as u64,
         mk_static!(MatterStackResources, MatterStackResources::new()),
     );
 

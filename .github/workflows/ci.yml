@@ -53,4 +53,7 @@ jobs:
         run: cd examples/esp32; cargo clippy --no-deps -- -Dwarnings
 
       - name: Examples-Build | Compile
+        env:
+          WIFI_SSID: ssid
+          WIFI_PASS: pass
         run: cd examples/esp32; cargo build
