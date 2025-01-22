@@ -1,22 +1,17 @@
 //! Wireless: Type aliases and state structs for an Embassy Matter stack running over a wireless network (Wifi or Thread) and BLE.
 
-use edge_nal_embassy::UdpBuffers;
-
-use embassy_net::StackResources;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 
-use rs_matter::error::Error;
-use rs_matter::transport::network::{MAX_RX_PACKET_SIZE, MAX_TX_PACKET_SIZE};
-use rs_matter::utils::init::{init, Init};
-
-use rs_matter::utils::sync::IfMutex;
+use rs_matter_stack::matter::error::Error;
+use rs_matter_stack::matter::utils::init::{init, Init};
+use rs_matter_stack::matter::utils::sync::IfMutex;
 use rs_matter_stack::network::{Embedding, Network};
 use rs_matter_stack::persist::KvBlobBuf;
 use rs_matter_stack::wireless::traits::{Ble, BleTask};
 use rs_matter_stack::{MatterStack, WirelessBle};
 
 use crate::ble::{BleControllerProvider, TroubleBtpGattContext, TroubleBtpGattPeripheral};
-use crate::netif::{MAX_META_DATA, MAX_SOCKETS};
+use crate::nal::{MatterStackResources, MatterUdpBuffers};
 
 pub use wifi::*;
 
@@ -95,13 +90,15 @@ where
 }
 
 pub struct EmbassyNetContext {
-    inner: IfMutex<CriticalSectionRawMutex, EmbassyNetContextInner>,
+    buffers: MatterUdpBuffers,
+    resources: IfMutex<CriticalSectionRawMutex, MatterStackResources>,
 }
 
 impl EmbassyNetContext {
     pub const fn new() -> Self {
         Self {
-            inner: IfMutex::new(EmbassyNetContextInner::new()),
+            buffers: MatterUdpBuffers::new(),
+            resources: IfMutex::new(MatterStackResources::new()),
         }
     }
 }
@@ -109,20 +106,6 @@ impl EmbassyNetContext {
 impl Default for EmbassyNetContext {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-struct EmbassyNetContextInner {
-    resources: StackResources<MAX_SOCKETS>,
-    buffers: UdpBuffers<MAX_SOCKETS, MAX_TX_PACKET_SIZE, MAX_RX_PACKET_SIZE, MAX_META_DATA>,
-}
-
-impl EmbassyNetContextInner {
-    pub const fn new() -> Self {
-        Self {
-            resources: StackResources::new(),
-            buffers: UdpBuffers::new(),
-        }
     }
 }
 
@@ -175,16 +158,16 @@ mod wifi {
 
     use edge_nal_embassy::Udp;
     use embassy_futures::select::select;
-    use embassy_net::Config;
 
-    use rs_matter::error::Error;
-    use rs_matter::utils::select::Coalesce;
-
+    use rs_matter_stack::matter::error::Error;
+    use rs_matter_stack::matter::utils::rand::Rand;
+    use rs_matter_stack::matter::utils::select::Coalesce;
     use rs_matter_stack::network::{Embedding, Network};
     use rs_matter_stack::wireless::traits::{
         Controller, Wifi, WifiData, Wireless, WirelessTask, NC,
     };
 
+    use crate::nal::create_net_stack;
     use crate::netif::EmbassyNetif;
 
     use super::{EmbassyNetContext, EmbassyWirelessMatterStack};
@@ -235,6 +218,7 @@ mod wifi {
     pub struct EmbassyWifi<'a, T> {
         provider: T,
         context: &'a EmbassyNetContext,
+        rand: Rand,
     }
 
     impl<'a, T> EmbassyWifi<'a, T>
@@ -249,12 +233,17 @@ mod wifi {
             Self::wrap(
                 provider,
                 stack.network().embedding().embedding().enet_context(),
+                stack.matter().rand(),
             )
         }
 
         /// Wrap the `EmbassyWifi` type around a Wifi driver provider and a network context.
-        pub const fn wrap(provider: T, context: &'a EmbassyNetContext) -> Self {
-            Self { provider, context }
+        pub const fn wrap(provider: T, context: &'a EmbassyNetContext, rand: Rand) -> Self {
+            Self {
+                provider,
+                context,
+                rand,
+            }
         }
     }
 
@@ -268,16 +257,16 @@ mod wifi {
         where
             A: WirelessTask<Data = Self::Data>,
         {
-            let mut context = self.context.inner.lock().await;
-            let context = &mut *context;
-
             let (driver, controller) = self.provider.provide().await;
 
-            let resources = &mut context.resources;
-            let buffers = &context.buffers;
+            let mut resources = self.context.resources.lock().await;
+            let resources = &mut *resources;
+            let buffers = &self.context.buffers;
 
-            let (stack, mut runner) =
-                embassy_net::new(driver, Config::default(), resources, 0 /*TODO */);
+            let mut seed = [0; core::mem::size_of::<u64>()];
+            (self.rand)(&mut seed);
+
+            let (stack, mut runner) = create_net_stack(driver, u64::from_le_bytes(seed), resources);
 
             let netif = EmbassyNetif::new(stack);
             let udp = Udp::new(stack, buffers);

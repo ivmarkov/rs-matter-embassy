@@ -12,8 +12,12 @@ harness = false
 name = "light_eth"
 harness = false
 
+#[patch.'https://github.com/ivmarkov/rs-matter-stack']
+#rs-matter-stack = { path = "../../../rs-matter-stack" }
+
 [patch.crates-io]
-rs-matter = { git = "https://github.com/ivmarkov/rs-matter" }
+#rs-matter = { git = "https://github.com/project-chip/rs-matter" }
+rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "pase-breaks-provisioning" }
 
 [dependencies]
 log = "0.4"
@@ -25,7 +29,7 @@ esp-alloc = { version = "0.6.0" }
 esp-println = { version = "0.13.0", features = ["log"] }
 esp-wifi = { version = "0.12.0", features = ["wifi", "ble"] }
 bt-hci = { version = "0.2" }
-
+heapless = "0.8"
 rs-matter-embassy = { path = "../../rs-matter-embassy" }
 embassy-sync = "0.6"
 embassy-futures = "0.1"

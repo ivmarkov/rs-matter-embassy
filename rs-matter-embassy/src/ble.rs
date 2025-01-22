@@ -7,19 +7,19 @@ use embassy_sync::blocking_mutex::raw::RawMutex;
 
 use log::{info, warn};
 
-use rs_matter::error::ErrorCode;
-use rs_matter::transport::network::btp::{
+use rs_matter_stack::matter::error::{Error, ErrorCode};
+use rs_matter_stack::matter::transport::network::btp::{
     AdvData, GattPeripheral, GattPeripheralEvent, C1_CHARACTERISTIC_UUID, C2_CHARACTERISTIC_UUID,
     MATTER_BLE_SERVICE_UUID16, MAX_BTP_SESSIONS,
 };
-use rs_matter::transport::network::BtAddr;
-use rs_matter::utils::init::{init, Init};
-use rs_matter::utils::storage::Vec;
-use rs_matter::utils::sync::{IfMutex, Signal};
+use rs_matter_stack::matter::transport::network::BtAddr;
+use rs_matter_stack::matter::utils::init::{init, Init};
+use rs_matter_stack::matter::utils::storage::Vec;
+use rs_matter_stack::matter::utils::sync::IfMutex;
 
 use trouble_host::att::{AttReq, AttRsp};
 use trouble_host::prelude::*;
-use trouble_host::{Address, BdAddr, BleHostError, Controller, Error, HostResources};
+use trouble_host::{self, Address, BdAddr, BleHostError, Controller, HostResources};
 
 const MAX_CONNECTIONS: usize = MAX_BTP_SESSIONS;
 const MAX_MTU_SIZE: usize = 251; // For now 512; // TODO const L2CAP_MTU: usize = 251;
@@ -98,7 +98,6 @@ where
     M: RawMutex,
 {
     ind: IfMutex<M, IndBuffer>,
-    ind_in_flight: Signal<M, bool>,
     resources: IfMutex<M, GPHostResources>,
 }
 
@@ -112,7 +111,6 @@ where
     pub const fn new() -> Self {
         Self {
             ind: IfMutex::new(IndBuffer::new()),
-            ind_in_flight: Signal::new(false),
             resources: IfMutex::new(GPHostResources::new()),
         }
     }
@@ -122,17 +120,11 @@ where
     pub fn init() -> impl Init<Self> {
         init!(Self {
             ind <- IfMutex::init(IndBuffer::init()),
-            ind_in_flight: Signal::new(false),
             resources: IfMutex::new(GPHostResources::new()), // TODO: Init
         })
     }
 
     // pub(crate) fn reset(&self) -> Result<(), ()> {
-    //     self.ind_in_flight.modify(|ind_inf_flight| {
-    //         *ind_inf_flight = false;
-    //         (false, ())
-    //     });
-
     //     self.ind
     //         .try_lock()
     //         .map(|mut ind| {
@@ -226,8 +218,8 @@ where
                         select(events, indications).await;
                     }
                     Err(e) => {
-                        #[cfg(feature = "defmt")]
-                        let e = defmt::Debug2Format(&e);
+                        // #[cfg(feature = "defmt")]
+                        // let e = defmt::Debug2Format(&e);
                         panic!("[adv] error: {:?}", e);
                     }
                 }
@@ -244,8 +236,8 @@ where
     {
         loop {
             if let Err(e) = runner.run().await {
-                #[cfg(feature = "defmt")]
-                let e = defmt::Debug2Format(&e);
+                // #[cfg(feature = "defmt")]
+                // let e = defmt::Debug2Format(&e);
                 panic!("[ble_task] error: {:?}", e);
             }
         }
@@ -255,7 +247,7 @@ where
         server: &Server<'_>,
         conn: &Connection<'_>,
         ind: &IfMutex<M, IndBuffer>,
-    ) -> Result<(), Error> {
+    ) -> Result<(), trouble_host::Error> {
         loop {
             let mut ind = ind.lock_if(|ind| !ind.data.is_empty()).await;
 
@@ -414,12 +406,7 @@ where
     M: RawMutex,
     C: BleControllerProvider,
 {
-    async fn run<F>(
-        &self,
-        service_name: &str,
-        adv_data: &AdvData,
-        callback: F,
-    ) -> Result<(), rs_matter::error::Error>
+    async fn run<F>(&self, service_name: &str, adv_data: &AdvData, callback: F) -> Result<(), Error>
     where
         F: FnMut(GattPeripheralEvent) + Send + Clone + 'static,
     {
@@ -430,7 +417,7 @@ where
         Ok(())
     }
 
-    async fn indicate(&self, data: &[u8], address: BtAddr) -> Result<(), rs_matter::error::Error> {
+    async fn indicate(&self, data: &[u8], address: BtAddr) -> Result<(), Error> {
         TroubleBtpGattPeripheral::indicate(self, data, address).await;
 
         Ok(())

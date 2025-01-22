@@ -14,20 +14,16 @@ use core::env;
 use core::pin::pin;
 
 use embassy_executor::Spawner;
-use embassy_futures::select::select;
+use embassy_futures::select::select4;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::{Duration, Timer};
 
 use esp_backtrace as _;
-
 use esp_hal::rng::Rng;
 use esp_hal::{clock::CpuClock, timer::timg::TimerGroup};
-
 use esp_wifi::wifi::{
-    ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent, WifiStaDevice,
-    WifiState,
+    ClientConfiguration, Configuration, WifiController, WifiEvent, WifiStaDevice, WifiState,
 };
-use esp_wifi::EspWifiController;
 
 use log::info;
 
@@ -37,19 +33,17 @@ use rs_matter_embassy::matter::data_model::cluster_on_off;
 use rs_matter_embassy::matter::data_model::device_types::DEV_TYPE_ON_OFF_LIGHT;
 use rs_matter_embassy::matter::data_model::objects::{Dataver, Endpoint, HandlerCompat, Node};
 use rs_matter_embassy::matter::data_model::system_model::descriptor;
-use rs_matter_embassy::matter::transport::network::{MAX_RX_PACKET_SIZE, MAX_TX_PACKET_SIZE};
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
 use rs_matter_embassy::matter::utils::sync::blocking::Mutex;
-use rs_matter_embassy::nal::net::{self, Config, Runner, StackResources};
-use rs_matter_embassy::nal::{Udp, UdpBuffers};
+use rs_matter_embassy::nal::{create_net_stack, MatterStackResources, MatterUdpBuffers, Udp};
 use rs_matter_embassy::netif::EmbassyNetif;
 use rs_matter_embassy::stack::persist::DummyPersist;
 use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
+use rs_matter_embassy::stack::utils::futures::IntoFaillble;
 use rs_matter_embassy::stack::MdnsType;
-
 use rs_matter_embassy::EmbassyEthMatterStack;
 
 const WIFI_SSID: &str = env!("WIFI_SSID");
@@ -71,8 +65,9 @@ macro_rules! mk_static {
 }
 
 #[esp_hal_embassy::main]
-async fn main(spawner: Spawner) {
-    esp_println::logger::init_logger(log::LevelFilter::Info);
+async fn main(_s: Spawner) {
+    //esp_println::logger::init_logger(log::LevelFilter::Info);
+    logger::init_logger(true, log::LevelFilter::Info);
 
     info!("Starting...");
 
@@ -97,12 +92,7 @@ async fn main(spawner: Spawner) {
         Mutex::new(RefCell::new(None));
     RAND.lock(|r| *r.borrow_mut() = Some(rng.clone()));
 
-    // TrouBLE needs the BLE controller to be static, which
-    // means the `EspWifiController` must be static too.
-    let init = &*mk_static!(
-        EspWifiController<'static>,
-        esp_wifi::init(timg0.timer0, rng, peripherals.RADIO_CLK,).unwrap()
-    );
+    let init = esp_wifi::init(timg0.timer0, rng, peripherals.RADIO_CLK).unwrap();
 
     #[cfg(not(feature = "esp32"))]
     {
@@ -146,25 +136,11 @@ async fn main(spawner: Spawner) {
     let (wifi_interface, controller) =
         esp_wifi::wifi::new_with_mode(&init, wifi, WifiStaDevice).unwrap();
 
-    let config = Config::dhcpv4(Default::default());
-
-    let seed = (rng.random() as u64) << 32 | rng.random() as u64;
-
-    let (net_stack, net_runner) = net::new(
+    let (net_stack, mut net_runner) = create_net_stack(
         wifi_interface,
-        config,
-        mk_static!(StackResources<3>, StackResources::<3>::new()),
-        seed,
+        (rng.random() as u64) << 32 | rng.random() as u64,
+        mk_static!(MatterStackResources, MatterStackResources::new()),
     );
-
-    spawner.spawn(connection(controller)).ok();
-    spawner.spawn(net_task(net_runner)).ok();
-
-    let udp_buffers =
-        mk_static!(UdpBuffers<3, MAX_TX_PACKET_SIZE, MAX_RX_PACKET_SIZE, 6>, UdpBuffers::new());
-
-    // Matter needs an IPv6 address to work
-    // TODO esp!(unsafe { esp_netif_create_ip6_linklocal(wifi.wifi().sta_netif().handle() as _) })?;
 
     // Our "light" on-off cluster.
     // Can be anything implementing `rs_matter::data_model::AsyncHandler`
@@ -194,11 +170,13 @@ async fn main(spawner: Spawner) {
     // Using `pin!` is completely optional, but saves some memory due to `rustc`
     // not being very intelligent w.r.t. stack usage in async functions
     let mut matter = pin!(stack.run(
-        // The Matter stack need access to the netif on which we'll operate
-        // Since we are pretending to use a wired Ethernet connection - yet -
-        // we are using a Wifi STA, provide the Wifi netif here
+        // The Matter stack needs access to the netif so as to detect network going up/down
         EmbassyNetif::new(net_stack),
-        Udp::new(net_stack, udp_buffers),
+        // The Matter stack needs to open two UDP sockets
+        Udp::new(
+            net_stack,
+            mk_static!(MatterUdpBuffers, MatterUdpBuffers::new())
+        ),
         // The Matter stack needs a persister to store its state
         // `EmbassyPersist`+`EmbassyKvBlobStore` saves to a user-supplied NOR Flash region
         // However, for this demo and for simplicity, we use a dummy persister that does nothing
@@ -231,11 +209,21 @@ async fn main(spawner: Spawner) {
     });
 
     // Schedule the Matter run & the device loop together
-    select(&mut matter, &mut device).coalesce().await.unwrap();
+    select4(
+        &mut matter,
+        &mut device,
+        connection(controller).into_fallible(),
+        async {
+            net_runner.run().await;
+            Ok(())
+        },
+    )
+    .coalesce()
+    .await
+    .unwrap();
 }
 
-#[embassy_executor::task]
-async fn connection(mut controller: WifiController<'static>) {
+async fn connection(mut controller: WifiController<'_>) {
     info!("start connection task");
     info!("Device capabilities: {:?}", controller.capabilities());
     loop {
@@ -270,11 +258,6 @@ async fn connection(mut controller: WifiController<'static>) {
     }
 }
 
-#[embassy_executor::task]
-async fn net_task(mut runner: Runner<'static, WifiDevice<'static, WifiStaDevice>>) {
-    runner.run().await
-}
-
 /// Endpoint 0 (the root endpoint) always runs
 /// the hidden Matter system clusters, so we pick ID=1
 const LIGHT_ENDPOINT_ID: u16 = 1;
@@ -291,3 +274,78 @@ const NODE: Node = Node {
         },
     ],
 };
+
+/// The default `EspLogger` from `esp_println` is not used as it does not
+/// print a timestamp and the module name. This custom logger is used instead.
+mod logger {
+    #![allow(unexpected_cfgs)]
+
+    use core::cell::Cell;
+
+    use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
+    use esp_println::println;
+
+    static COLORED: Mutex<CriticalSectionRawMutex, Cell<bool>> = Mutex::new(Cell::new(true));
+
+    /// Initialize the logger with the given maximum log level.
+    pub fn init_logger(colored: bool, level: log::LevelFilter) {
+        COLORED.lock(|c| c.set(colored));
+
+        unsafe { log::set_logger_racy(&EspIdfLikeLogger) }.unwrap();
+        unsafe {
+            log::set_max_level_racy(level);
+        }
+    }
+
+    struct EspIdfLikeLogger;
+
+    impl log::Log for EspIdfLikeLogger {
+        fn enabled(&self, _metadata: &log::Metadata) -> bool {
+            true
+        }
+
+        #[allow(unused)]
+        fn log(&self, record: &log::Record) {
+            if !self.enabled(record.metadata()) {
+                return;
+            }
+
+            const RESET: &str = "\u{001B}[0m";
+            const RED: &str = "\u{001B}[31m";
+            const GREEN: &str = "\u{001B}[32m";
+            const YELLOW: &str = "\u{001B}[33m";
+            const BLUE: &str = "\u{001B}[34m";
+            const CYAN: &str = "\u{001B}[35m";
+
+            let colored = COLORED.lock(|c| c.get());
+
+            let (color, reset) = if colored {
+                (
+                    match record.level() {
+                        log::Level::Error => RED,
+                        log::Level::Warn => YELLOW,
+                        log::Level::Info => GREEN,
+                        log::Level::Debug => BLUE,
+                        log::Level::Trace => CYAN,
+                    },
+                    RESET,
+                )
+            } else {
+                ("", "")
+            };
+
+            println!(
+                //"{}{:.1} ({}) {}: {}{}",
+                "{}{:.1} {}: {}{}",
+                color,
+                record.level(),
+                //UtcTimestamp::new((&NOW).now()),
+                record.metadata().target(),
+                record.args(),
+                reset
+            );
+        }
+
+        fn flush(&self) {}
+    }
+}

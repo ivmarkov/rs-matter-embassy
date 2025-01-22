@@ -7,15 +7,8 @@ use embassy_net::{HardwareAddress, Stack};
 use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
 use embassy_time::{Duration, Timer};
 
-use rs_matter::error::Error;
+use rs_matter_stack::matter::error::Error;
 use rs_matter_stack::netif::{Netif, NetifConf};
-
-/// The maximum number of sockets that the Matter stack would use:
-/// - One, for the UDP socket used by the Matter protocol
-/// - Another, for the UDP socket used by the mDNS responder
-pub const MAX_SOCKETS: usize = 2;
-
-pub const MAX_META_DATA: usize = 4;
 
 const TIMEOUT_PERIOD_SECS: u8 = 5;
 
@@ -28,7 +21,10 @@ pub struct EmbassyNetif<'d> {
 impl<'d> EmbassyNetif<'d> {
     /// Create a new `EmbassyNetif` instance
     pub fn new(stack: Stack<'d>) -> Self {
-        Self { stack, up: Mutex::new(Cell::new(false)) }
+        Self {
+            stack,
+            up: Mutex::new(Cell::new(false)),
+        }
     }
 
     fn get_conf(&self) -> Option<NetifConf> {
@@ -49,11 +45,11 @@ impl<'d> EmbassyNetif<'d> {
                 let HardwareAddress::Ethernet(addr) = self.stack.hardware_address() else {
                     panic!("Invalid hardware address");
                 };
-                
+
                 addr.0
-            }
+            },
         };
-        
+
         Some(conf)
     }
 
@@ -62,14 +58,21 @@ impl<'d> EmbassyNetif<'d> {
         // Use a timer as a workaround
 
         if self.up.lock(|up| up.get()) {
-            select(self.stack.wait_config_down(), Timer::after(Duration::from_secs(TIMEOUT_PERIOD_SECS as _))).await;
+            select(
+                self.stack.wait_config_down(),
+                Timer::after(Duration::from_secs(TIMEOUT_PERIOD_SECS as _)),
+            )
+            .await;
         } else {
-            select(self.stack.wait_config_up(), Timer::after(Duration::from_secs(TIMEOUT_PERIOD_SECS as _))).await;
+            select(
+                self.stack.wait_config_up(),
+                Timer::after(Duration::from_secs(TIMEOUT_PERIOD_SECS as _)),
+            )
+            .await;
         }
 
         self.up.lock(|up| up.set(self.stack.is_config_up()));
     }
-
 }
 
 impl Netif for EmbassyNetif<'_> {

@@ -4,10 +4,10 @@ use core::cell::RefCell;
 use core::ops::Range;
 
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
+
 use log::info;
 
-use rs_matter::error::Error;
-
+use rs_matter_stack::matter::error::Error;
 use rs_matter_stack::persist::{Key, KvBlobStore, KvPersist};
 
 use sequential_storage::cache::NoCache;

@@ -79,7 +79,7 @@ async fn main(_s: Spawner) {
     });
 
     // For Wifi and for the only Matter dependency which needs (~4KB) alloc - `x509`
-    esp_alloc::heap_allocator!(80 * 1024);
+    esp_alloc::heap_allocator!(100 * 1024);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let rng = esp_hal::rng::Rng::new(peripherals.RNG);
@@ -272,11 +272,11 @@ impl<'a, 'd> rs_matter_embassy::wireless::WifiDriverProvider for WifiDriverProvi
 // `embedded-wifi`?
 mod wifi_controller {
     use esp_wifi::wifi::{
-        AuthMethod, ClientConfiguration, Configuration, ScanConfig, WifiController,
+        AuthMethod, ClientConfiguration, Configuration, ScanConfig, WifiController, WifiError,
     };
 
     use rs_matter_embassy::matter::data_model::sdm::nw_commissioning::WiFiSecurity;
-    use rs_matter_embassy::matter::error::Error;
+    use rs_matter_embassy::matter::error::{Error, ErrorCode};
     use rs_matter_embassy::matter::tlv::OctetsOwned;
     use rs_matter_embassy::matter::utils::storage::Vec;
     use rs_matter_embassy::stack::wireless::traits::{
@@ -300,6 +300,10 @@ mod wifi_controller {
         where
             F: FnMut(Option<&<Self::Data as WirelessData>::ScanResult>) -> Result<(), Error>,
         {
+            if !self.0.is_started().map_err(to_err)? {
+                self.0.start_async().await.map_err(to_err)?;
+            }
+
             let mut scan_config = ScanConfig::default();
             if let Some(network_id) = network_id {
                 scan_config.ssid = Some(network_id.0.as_str());
@@ -309,7 +313,7 @@ mod wifi_controller {
                 .0
                 .scan_with_config_async::<MAX_NETWORKS>(scan_config)
                 .await
-                .unwrap();
+                .map_err(to_err)?;
 
             for ap in aps {
                 callback(Some(&WifiScanResult {
@@ -327,11 +331,10 @@ mod wifi_controller {
                         Some(AuthMethod::WPA3Personal) => WiFiSecurity::Wpa3Personal,
                         _ => WiFiSecurity::Wpa2Personal,
                     },
-                }))
-                .unwrap();
+                }))?;
             }
 
-            callback(None).unwrap();
+            callback(None)?;
 
             Ok(())
         }
@@ -340,15 +343,28 @@ mod wifi_controller {
             &mut self,
             creds: &<Self::Data as WirelessData>::NetworkCredentials,
         ) -> Result<(), Error> {
+            self.1 = None;
+
+            if self.0.is_started().map_err(to_err)? {
+                self.0.stop_async().await.map_err(to_err)?;
+            }
+
             self.0
                 .set_configuration(&Configuration::Client(ClientConfiguration {
                     ssid: creds.ssid.0.clone(),
                     password: creds.password.clone(),
                     ..Default::default()
                 }))
-                .unwrap();
+                .map_err(to_err)?;
 
-            self.0.connect_async().await.unwrap();
+            self.0.start_async().await.map_err(to_err)?;
+            self.0.connect_async().await.map_err(to_err)?;
+
+            self.1 = self
+                .0
+                .is_connected()
+                .map_err(to_err)?
+                .then_some(creds.ssid.clone());
 
             Ok(())
         }
@@ -367,5 +383,9 @@ mod wifi_controller {
         async fn stats(&mut self) -> Result<<Self::Data as WirelessData>::Stats, Error> {
             Ok(None)
         }
+    }
+
+    fn to_err(_: WifiError) -> Error {
+        Error::new(ErrorCode::NoNetworkInterface)
     }
 }
