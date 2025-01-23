@@ -34,7 +34,6 @@ use panic_probe as _;
 
 use log::info;
 
-use rs_matter_embassy::rand::rp::rp_rand;
 use rs_matter_embassy::epoch::epoch;
 use rs_matter_embassy::matter::data_model::cluster_basic_information::BasicInfoConfig;
 use rs_matter_embassy::matter::data_model::cluster_on_off;
@@ -43,14 +42,17 @@ use rs_matter_embassy::matter::data_model::objects::{Dataver, Endpoint, HandlerC
 use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
+use rs_matter_embassy::rand::rp::rp_rand;
 use rs_matter_embassy::stack::persist::DummyPersist;
 use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
 use rs_matter_embassy::stack::MdnsType;
-use rs_matter_embassy::wireless::{EmbassyBle, PreexistingBleController};
 use rs_matter_embassy::wireless::wifi::rp::Cyw43WifiController;
-use rs_matter_embassy::wireless::wifi::{EmbassyWifi, EmbassyWifiMatterStack, PreexistingWifiDriver};
+use rs_matter_embassy::wireless::wifi::{
+    EmbassyWifi, EmbassyWifiMatterStack, PreexistingWifiDriver,
+};
+use rs_matter_embassy::wireless::{EmbassyBle, PreexistingBleController};
 use rtt_target::rtt_init_log;
 
 macro_rules! mk_static {
@@ -81,7 +83,7 @@ async fn main(spawner: Spawner) {
     // `rs-matter` uses the `x509` crate which (still) needs a few kilos of heap space
     {
         const HEAP_SIZE: usize = 8192;
-        
+
         static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
         unsafe { HEAP.init(addr_of_mut!(HEAP_MEM) as usize, HEAP_SIZE) }
     }
@@ -130,13 +132,14 @@ async fn main(spawner: Spawner) {
     );
 
     let state = mk_static!(cyw43::State, cyw43::State::new());
-    let (net_device, bt_device, mut control, runner) = cyw43::new_with_bluetooth(state, pwr, spi, fw, btfw).await;
+    let (net_device, bt_device, mut control, runner) =
+        cyw43::new_with_bluetooth(state, pwr, spi, fw, btfw).await;
     spawner.spawn(cyw43_task(runner)).unwrap();
     control.init(clm).await;
 
     let controller: ExternalController<_, 10> = ExternalController::new(bt_device);
 
-     // == Step 2: ==
+    // == Step 2: ==
     // Statically allocate the Matter stack.
     // For MCUs, it is best to allocate it statically, so as to avoid program stack blowups (its memory footprint is ~ 35 to 50KB).
     // It is also (currently) a mandatory requirement when the wireless stack variation is used.
@@ -192,7 +195,10 @@ async fn main(spawner: Spawner) {
     // This step can be repeated in that the stack can be stopped and started multiple times, as needed.
     let mut matter = pin!(stack.run(
         // The Matter stack needs Wifi
-        EmbassyWifi::new(PreexistingWifiDriver::new(net_device, Cyw43WifiController::new(control)), stack),
+        EmbassyWifi::new(
+            PreexistingWifiDriver::new(net_device, Cyw43WifiController::new(control)),
+            stack
+        ),
         // The Matter stack needs BLE
         EmbassyBle::new(PreexistingBleController::new(controller), stack),
         // The Matter stack needs a persister to store its state
@@ -231,7 +237,9 @@ async fn main(spawner: Spawner) {
 }
 
 #[embassy_executor::task]
-async fn cyw43_task(runner: cyw43::Runner<'static, Output<'static>, PioSpi<'static, PIO0, 0, DMA_CH0>>) -> ! {
+async fn cyw43_task(
+    runner: cyw43::Runner<'static, Output<'static>, PioSpi<'static, PIO0, 0, DMA_CH0>>,
+) -> ! {
     runner.run().await
 }
 
