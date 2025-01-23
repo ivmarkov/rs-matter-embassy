@@ -89,7 +89,7 @@ async fn main(spawner: Spawner) {
     }
 
     // == Step 1: ==
-    // Necessary `esp-hal` and `esp-wifi` initialization boilerplate
+    // Necessary `embassy-rp` and `cyw43` initialization boilerplate
 
     let p = embassy_rp::init(Default::default());
 
