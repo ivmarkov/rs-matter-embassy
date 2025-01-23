@@ -1,3 +1,13 @@
+//! An example utilizing the `EmbassyWifiMatterStack` struct.
+//!
+//! As the name suggests, this Matter stack assembly uses Wifi as the main transport,
+//! and thus BLE for commissioning.
+//!
+//! If you want to use Ethernet, utilize `EmbassyEthMatterStack` instead.
+//! If you want to use non-concurrent commissioning, utilize `EmbassyWifiNCMatterStack` instead
+//! (Note: Alexa does not work (yet) with non-concurrent commissioning.)
+//!
+//! The example implements a fictitious Light device (an On-Off Matter cluster).
 #![no_std]
 #![no_main]
 
@@ -9,11 +19,8 @@ use bt_hci::controller::ExternalController;
 
 use cyw43_pio::PioSpi;
 
-use defmt::*;
-
 use embassy_executor::Spawner;
 use embassy_futures::select::select;
-
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, PIO0};
@@ -21,14 +28,11 @@ use embassy_rp::pio::{InterruptHandler, Pio};
 use embassy_time::{Duration, Timer};
 
 use embedded_alloc::LlffHeap;
-use rs_matter_embassy::ble::Preexisting;
+
+use log::info;
+
 use rs_matter_embassy::rand::rp::rp_rand;
 use rs_matter_embassy::wireless::rp::Cyw43WifiController;
-
-//use trouble_example_apps::ble_bas_peripheral;
-use {defmt_rtt as _, embassy_time as _, panic_probe as _};
-
-//use rs_matter_embassy::ble::esp::EspBleControllerProvider;
 use rs_matter_embassy::epoch::epoch;
 use rs_matter_embassy::matter::data_model::cluster_basic_information::BasicInfoConfig;
 use rs_matter_embassy::matter::data_model::cluster_on_off;
@@ -37,14 +41,12 @@ use rs_matter_embassy::matter::data_model::objects::{Dataver, Endpoint, HandlerC
 use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
-//use rs_matter_embassy::rand::esp::{esp_init_rand, esp_rand};
 use rs_matter_embassy::stack::persist::DummyPersist;
 use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
 use rs_matter_embassy::stack::MdnsType;
-//use rs_matter_embassy::wireless::esp::EspWifiDriverProvider;
-use rs_matter_embassy::wireless::{EmbassyBle, EmbassyWifi, EmbassyWifiMatterStack, PreexistingWifi};
+use rs_matter_embassy::wireless::{EmbassyBle, EmbassyWifi, EmbassyWifiMatterStack, PreexistingBleController, PreexistingWifiDriver};
 
 macro_rules! mk_static {
     ($t:ty) => {{
@@ -68,19 +70,20 @@ bind_interrupts!(struct Irqs {
 #[global_allocator]
 static HEAP: LlffHeap = LlffHeap::empty();
 
-#[embassy_executor::task]
-async fn cyw43_task(runner: cyw43::Runner<'static, Output<'static>, PioSpi<'static, PIO0, 0, DMA_CH0>>) -> ! {
-    runner.run().await
-}
-
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
+    // `rs-matter` uses the `x509` crate which (still) needs a few kilos of heap space
     {
         const HEAP_SIZE: usize = 8192;
         
         static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
         unsafe { HEAP.init(addr_of_mut!(HEAP_MEM) as usize, HEAP_SIZE) }
     }
+
+    info!("Starting...");
+
+    // == Step 1: ==
+    // Necessary `esp-hal` and `esp-wifi` initialization boilerplate
 
     let p = embassy_rp::init(Default::default());
 
@@ -117,7 +120,7 @@ async fn main(spawner: Spawner) {
 
     let state = mk_static!(cyw43::State, cyw43::State::new());
     let (net_device, bt_device, mut control, runner) = cyw43::new_with_bluetooth(state, pwr, spi, fw, btfw).await;
-    unwrap!(spawner.spawn(cyw43_task(runner)));
+    spawner.spawn(cyw43_task(runner)).unwrap();
     control.init(clm).await;
 
     let controller: ExternalController<_, 10> = ExternalController::new(bt_device);
@@ -178,9 +181,9 @@ async fn main(spawner: Spawner) {
     // This step can be repeated in that the stack can be stopped and started multiple times, as needed.
     let mut matter = pin!(stack.run(
         // The Matter stack needs to instantiate an `embassy-net` `Driver` and `Controller`
-        EmbassyWifi::new(PreexistingWifi(net_device, Cyw43WifiController::new(control)), stack),
+        EmbassyWifi::new(PreexistingWifiDriver::new(net_device, Cyw43WifiController::new(control)), stack),
         // The Matter stack needs BLE
-        EmbassyBle::new(Preexisting(controller), stack),
+        EmbassyBle::new(PreexistingBleController::new(controller), stack),
         // The Matter stack needs a persister to store its state
         // `EmbassyPersist`+`EmbassyKvBlobStore` saves to a user-supplied NOR Flash region
         // However, for this demo and for simplicity, we use a dummy persister that does nothing
@@ -214,6 +217,11 @@ async fn main(spawner: Spawner) {
 
     // Schedule the Matter run & the device loop together
     select(&mut matter, &mut device).coalesce().await.unwrap();
+}
+
+#[embassy_executor::task]
+async fn cyw43_task(runner: cyw43::Runner<'static, Output<'static>, PioSpi<'static, PIO0, 0, DMA_CH0>>) -> ! {
+    runner.run().await
 }
 
 /// Endpoint 0 (the root endpoint) always runs

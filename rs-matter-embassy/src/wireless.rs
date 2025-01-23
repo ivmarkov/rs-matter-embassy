@@ -15,7 +15,7 @@ use rs_matter_stack::wireless::traits::{Ble, BleTask, WirelessConfig, WirelessDa
 use rs_matter_stack::{MatterStack, WirelessBle};
 use trouble_host::Controller;
 
-use crate::ble::{BleControllerProvider, TroubleBtpGattContext, TroubleBtpGattPeripheral};
+use crate::ble::{ControllerRef, TroubleBtpGattContext, TroubleBtpGattPeripheral};
 use crate::nal::{MatterStackResources, MatterUdpBuffers};
 
 pub use wifi::*;
@@ -126,6 +126,52 @@ impl Default for EmbassyNetContext {
     }
 }
 
+/// A companion trait of `EmbassyBle` for providing a BLE controller.
+pub trait BleControllerProvider {
+    type Controller<'a>: Controller
+    where
+        Self: 'a;
+
+    /// Provide a BLE controller by creating it when the Matter stack needs it
+    async fn provide(&mut self) -> Self::Controller<'_>;
+}
+
+impl<T> BleControllerProvider for &mut T
+where
+    T: BleControllerProvider,
+{
+    type Controller<'a>
+        = T::Controller<'a>
+    where
+        Self: 'a;
+
+    async fn provide(&mut self) -> Self::Controller<'_> {
+        (*self).provide().await
+    }
+}
+
+/// A BLE controller provider that uses a pre-existing, already created BLE controller,
+/// rather than creating one when the Matter stack needs it.
+pub struct PreexistingBleController<C>(C);
+
+impl<C> PreexistingBleController<C> {
+    /// Create a new instance of the `PreexistingBleController` type.
+    pub const fn new(controller: C) -> Self {
+        Self(controller)
+    }
+}
+
+impl<C> BleControllerProvider for PreexistingBleController<C>
+where
+    C: Controller,
+{
+    type Controller<'a> = ControllerRef<'a, C> where Self: 'a;
+
+    async fn provide(&mut self) -> Self::Controller<'_> {
+        ControllerRef::new(&self.0)
+    }
+}
+
 /// A `Ble` trait implementation for `trouble`'s BLE stack
 pub struct EmbassyBle<'a, T> {
     provider: T,
@@ -193,6 +239,53 @@ where
     }
 }
 
+
+#[cfg(feature = "esp")]
+pub mod esp {
+    use bt_hci::controller::ExternalController;
+
+    use esp_hal::peripheral::{Peripheral, PeripheralRef};
+
+    use esp_wifi::ble::controller::BleConnector;
+    use esp_wifi::EspWifiController;
+
+    const SLOTS: usize = 20;
+
+    /// A `BleControllerProvider` implementation for the ESP32 family of chips.
+    pub struct EspBleControllerProvider<'a, 'd> {
+        controller: &'a EspWifiController<'d>,
+        peripheral: PeripheralRef<'d, esp_hal::peripherals::BT>,
+    }
+
+    impl<'a, 'd> EspBleControllerProvider<'a, 'd> {
+        /// Create a new instance
+        ///
+        /// # Arguments
+        /// - `controller`: The WiFi controller instance
+        /// - `peripheral`: The Bluetooth peripheral instance
+        pub fn new(
+            controller: &'a EspWifiController<'d>,
+            peripheral: impl Peripheral<P = esp_hal::peripherals::BT> + 'd,
+        ) -> Self {
+            Self {
+                controller,
+                peripheral: peripheral.into_ref(),
+            }
+        }
+    }
+
+    impl super::BleControllerProvider for EspBleControllerProvider<'_, '_> {
+        type Controller<'t>
+            = ExternalController<BleConnector<'t>, SLOTS>
+        where
+            Self: 't;
+
+        async fn provide(&mut self) -> Self::Controller<'_> {
+            ExternalController::new(BleConnector::new(self.controller, &mut self.peripheral))
+        }
+    }
+}
+
 // Wifi: Type aliases and state structs for an Embassy Matter stack running over a Wifi network and BLE.
 mod wifi {
     use core::pin::pin;
@@ -257,9 +350,18 @@ mod wifi {
         }
     }
 
-    pub struct PreexistingWifi<D, C>(pub D, pub C);
+    /// A Wifi driver provider that uses a pre-existing, already created Wifi driver and controller,
+    /// rather than creating them when the Matter stack needs them.
+    pub struct PreexistingWifiDriver<D, C>(D, C);
 
-    impl<D, C> WifiDriverProvider for PreexistingWifi<D, C>
+    impl<D, C> PreexistingWifiDriver<D, C> {
+        /// Create a new instance of the `PreexistingWifiDriver` type.
+        pub const fn new(driver: D, controller: C) -> Self {
+            Self(driver, controller)
+        }
+    }
+
+    impl<D, C> WifiDriverProvider for PreexistingWifiDriver<D, C>
     where
         D: embassy_net::driver::Driver,
         C: Controller<Data = WifiData>,

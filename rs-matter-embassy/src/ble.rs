@@ -40,44 +40,6 @@ const ADV_SETS: usize = 1;
 
 pub type GPHostResources = HostResources<MAX_CONNECTIONS, MAX_CHANNELS, MAX_MTU_SIZE, ADV_SETS>;
 
-/// A companion trait of `EmbassyBle` for providing a BLE controller.
-// TODO: Move to `wireless` once https://github.com/embassy-rs/bt-hci/issues/32 is resolved
-pub trait BleControllerProvider {
-    type Controller<'a>: Controller
-    where
-        Self: 'a;
-
-    /// Provide a BLE controller by creating it when the Matter stack needs it
-    async fn provide(&mut self) -> Self::Controller<'_>;
-}
-
-impl<T> BleControllerProvider for &mut T
-where
-    T: BleControllerProvider,
-{
-    type Controller<'a>
-        = T::Controller<'a>
-    where
-        Self: 'a;
-
-    async fn provide(&mut self) -> Self::Controller<'_> {
-        (*self).provide().await
-    }
-}
-
-pub struct Preexisting<C>(pub C);
-
-impl<C> BleControllerProvider for Preexisting<C>
-where
-    C: Controller,
-{
-    type Controller<'a> = ControllerRef<'a, C> where Self: 'a;
-
-    async fn provide(&mut self) -> Self::Controller<'_> {
-        ControllerRef::new(&self.0)
-    }
-}
-
 type External = [u8; 0];
 
 // GATT Server definition
@@ -469,9 +431,13 @@ where
     }
 }
 
+/// A newtype allowing to use a bt_hci `&Controller` as a `Controller`
+/// A workaround for:
+/// https://github.com/embassy-rs/bt-hci/issues/32
 pub struct ControllerRef<'a, C>(&'a C);
 
 impl<'a, C> ControllerRef<'a, C> {
+    /// Create a new instance.
     pub const fn new(controller: &'a C) -> Self {
         Self(controller)
     }
@@ -559,51 +525,5 @@ where
 {
     fn exec(&self, cmd: &Q) -> impl Future<Output = Result<(), bt_hci::cmd::Error<Self::Error>>> {
         self.0.exec(cmd)
-    }
-}
-
-#[cfg(feature = "esp")]
-pub mod esp {
-    use bt_hci::controller::ExternalController;
-
-    use esp_hal::peripheral::{Peripheral, PeripheralRef};
-
-    use esp_wifi::ble::controller::BleConnector;
-    use esp_wifi::EspWifiController;
-
-    const SLOTS: usize = 20;
-
-    /// A `BleControllerProvider` implementation for the ESP32 family of chips.
-    pub struct EspBleControllerProvider<'a, 'd> {
-        controller: &'a EspWifiController<'d>,
-        peripheral: PeripheralRef<'d, esp_hal::peripherals::BT>,
-    }
-
-    impl<'a, 'd> EspBleControllerProvider<'a, 'd> {
-        /// Create a new instance
-        ///
-        /// # Arguments
-        /// - `controller`: The WiFi controller instance
-        /// - `peripheral`: The Bluetooth peripheral instance
-        pub fn new(
-            controller: &'a EspWifiController<'d>,
-            peripheral: impl Peripheral<P = esp_hal::peripherals::BT> + 'd,
-        ) -> Self {
-            Self {
-                controller,
-                peripheral: peripheral.into_ref(),
-            }
-        }
-    }
-
-    impl super::BleControllerProvider for EspBleControllerProvider<'_, '_> {
-        type Controller<'t>
-            = ExternalController<BleConnector<'t>, SLOTS>
-        where
-            Self: 't;
-
-        async fn provide(&mut self) -> Self::Controller<'_> {
-            ExternalController::new(BleConnector::new(self.controller, &mut self.peripheral))
-        }
     }
 }

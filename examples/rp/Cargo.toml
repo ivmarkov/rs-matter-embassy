@@ -29,13 +29,10 @@ cyw43 = { version = "0.3.0", features = ["defmt", "firmware-logs", "bluetooth"] 
 cyw43-pio = { version = "0.3.0", features = ["defmt"] }
 rs-matter-embassy = { path = "../../rs-matter-embassy", features = ["rp"] }
 embedded-alloc = "0.6"
-
-defmt = "0.3"
-defmt-rtt = "0.4.0"
+log = "0.4"
 
 cortex-m = { version = "0.7.6" }
 cortex-m-rt = "0.7.0"
-panic-probe = { version = "0.3", features = ["print-defmt"] }
 static_cell = "2"
 portable-atomic = { version = "1.5", features = ["critical-section"] }
 
