@@ -2,3 +2,4 @@
 .embuild
 target
 Cargo.lock
+cyw43-firmware

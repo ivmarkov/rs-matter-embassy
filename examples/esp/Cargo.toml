@@ -35,6 +35,7 @@ embassy-sync = "0.6"
 embassy-futures = "0.1"
 embassy-time = "0.4"
 static_cell = "2"
+portable-atomic = { version = "1", features = ["unsafe-assume-single-core"] }
 
 [features]
 default = ["esp32c3"]

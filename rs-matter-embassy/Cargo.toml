@@ -34,6 +34,7 @@ opt-level = "z"
 [features]
 default = ["rs-matter-stack"]
 esp = ["esp-wifi", "esp-hal"]
+rp = ["cyw43", "cyw43-pio", "embassy-rp", "rand_core"]
 
 [dependencies]
 log = { version = "0.4", default-features = false }
@@ -52,8 +53,13 @@ scopeguard = { version = "1", default-features = false }
 rs-matter = { version = "0.1", default-features = false, features = ["rustcrypto"] }
 rs-matter-stack = { git = "https://github.com/ivmarkov/rs-matter-stack", default-features = false, optional = true, features = ["rustcrypto"] }
 static_cell = "2"
-portable-atomic = { version = "1", features = ["unsafe-assume-single-core"] }
 
 # Only necessary when `rs-matter-embassy` is providing extra-sugar for the `esp32*` chips family
 esp-wifi = { version = "0.12", optional = true, features = ["wifi", "ble"] }
 esp-hal = { version = "0.23", optional = true, features = ["unstable"] }
+
+# Only necessary when `rs-matter-embassy` is providing extra-sugar for the RPi Pico W MCU
+cyw43 = { version = "0.3", optional = true, features = ["firmware-logs", "bluetooth"] }
+cyw43-pio = { version = "0.3.0", optional = true }
+embassy-rp = { version = "0.3.0", optional = true, features = ["unstable-pac", "rp2040"] }
+rand_core = { version = "0.6.4", optional = true }

@@ -4,19 +4,19 @@ use core::mem::MaybeUninit;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 
+use rs_matter::tlv::{FromTLV, ToTLV};
 use rs_matter_stack::matter::error::Error;
 use rs_matter_stack::matter::utils::init::{init, Init};
 use rs_matter_stack::matter::utils::rand::Rand;
 use rs_matter_stack::matter::utils::sync::IfMutex;
 use rs_matter_stack::network::{Embedding, Network};
 use rs_matter_stack::persist::KvBlobBuf;
-use rs_matter_stack::wireless::traits::{Ble, BleTask};
+use rs_matter_stack::wireless::traits::{Ble, BleTask, WirelessConfig, WirelessData};
 use rs_matter_stack::{MatterStack, WirelessBle};
+use trouble_host::Controller;
 
-use crate::ble::{BleControllerProvider, TroubleBtpGattContext, TroubleBtpGattPeripheral};
+use crate::ble::{ControllerRef, TroubleBtpGattContext, TroubleBtpGattPeripheral};
 use crate::nal::{MatterStackResources, MatterUdpBuffers};
-
-pub use wifi::*;
 
 /// A type alias for an Embassy Matter stack running over a wireless network (Wifi or Thread) and BLE.
 pub type EmbassyWirelessMatterStack<'a, T, E = ()> = MatterStack<'a, EmbassyWirelessBle<T, E>>;
@@ -124,6 +124,55 @@ impl Default for EmbassyNetContext {
     }
 }
 
+/// A companion trait of `EmbassyBle` for providing a BLE controller.
+pub trait BleControllerProvider {
+    type Controller<'a>: Controller
+    where
+        Self: 'a;
+
+    /// Provide a BLE controller by creating it when the Matter stack needs it
+    async fn provide(&mut self) -> Self::Controller<'_>;
+}
+
+impl<T> BleControllerProvider for &mut T
+where
+    T: BleControllerProvider,
+{
+    type Controller<'a>
+        = T::Controller<'a>
+    where
+        Self: 'a;
+
+    async fn provide(&mut self) -> Self::Controller<'_> {
+        (*self).provide().await
+    }
+}
+
+/// A BLE controller provider that uses a pre-existing, already created BLE controller,
+/// rather than creating one when the Matter stack needs it.
+pub struct PreexistingBleController<C>(C);
+
+impl<C> PreexistingBleController<C> {
+    /// Create a new instance of the `PreexistingBleController` type.
+    pub const fn new(controller: C) -> Self {
+        Self(controller)
+    }
+}
+
+impl<C> BleControllerProvider for PreexistingBleController<C>
+where
+    C: Controller,
+{
+    type Controller<'a>
+        = ControllerRef<'a, C>
+    where
+        Self: 'a;
+
+    async fn provide(&mut self) -> Self::Controller<'_> {
+        ControllerRef::new(&self.0)
+    }
+}
+
 /// A `Ble` trait implementation for `trouble`'s BLE stack
 pub struct EmbassyBle<'a, T> {
     provider: T,
@@ -136,8 +185,10 @@ where
     T: BleControllerProvider,
 {
     /// Create a new instance of the `EmbassyBle` type.
-    pub fn new<E>(provider: T, stack: &'a EmbassyWifiMatterStack<'a, E>) -> Self
+    pub fn new<E, Q>(provider: T, stack: &'a EmbassyWirelessMatterStack<'a, Q, E>) -> Self
     where
+        Q: WirelessConfig,
+        <Q::Data as WirelessData>::NetworkCredentials: Clone + for<'t> FromTLV<'t> + ToTLV,
         E: Embedding + 'static,
     {
         Self::wrap(
@@ -169,17 +220,87 @@ where
     where
         A: BleTask,
     {
-        let peripheral = TroubleBtpGattPeripheral::new(&mut self.provider, self.rand, self.context);
+        let controller = self.provider.provide().await;
 
-        task.run(peripheral).await
+        let peripheral = TroubleBtpGattPeripheral::new(controller, self.rand, self.context);
+
+        task.run(&peripheral).await
+    }
+}
+
+impl<'a, C> TroubleBtpGattPeripheral<'a, CriticalSectionRawMutex, C>
+where
+    C: Controller,
+{
+    pub fn new_for_stack<T, E>(
+        controller: C,
+        stack: &'a crate::wireless::EmbassyWirelessMatterStack<T, E>,
+    ) -> Self
+    where
+        T: WirelessConfig,
+        <T::Data as WirelessData>::NetworkCredentials: Clone + for<'t> FromTLV<'t> + ToTLV,
+        E: Embedding + 'static,
+    {
+        Self::new(
+            controller,
+            stack.matter().rand(),
+            stack.network().embedding().embedding().ble_context(),
+        )
+    }
+}
+
+#[cfg(feature = "esp")]
+pub mod esp {
+    use bt_hci::controller::ExternalController;
+
+    use esp_hal::peripheral::{Peripheral, PeripheralRef};
+
+    use esp_wifi::ble::controller::BleConnector;
+    use esp_wifi::EspWifiController;
+
+    const SLOTS: usize = 20;
+
+    /// A `BleControllerProvider` implementation for the ESP32 family of chips.
+    pub struct EspBleControllerProvider<'a, 'd> {
+        controller: &'a EspWifiController<'d>,
+        peripheral: PeripheralRef<'d, esp_hal::peripherals::BT>,
+    }
+
+    impl<'a, 'd> EspBleControllerProvider<'a, 'd> {
+        /// Create a new instance
+        ///
+        /// # Arguments
+        /// - `controller`: The WiFi controller instance
+        /// - `peripheral`: The Bluetooth peripheral instance
+        pub fn new(
+            controller: &'a EspWifiController<'d>,
+            peripheral: impl Peripheral<P = esp_hal::peripherals::BT> + 'd,
+        ) -> Self {
+            Self {
+                controller,
+                peripheral: peripheral.into_ref(),
+            }
+        }
+    }
+
+    impl super::BleControllerProvider for EspBleControllerProvider<'_, '_> {
+        type Controller<'t>
+            = ExternalController<BleConnector<'t>, SLOTS>
+        where
+            Self: 't;
+
+        async fn provide(&mut self) -> Self::Controller<'_> {
+            ExternalController::new(BleConnector::new(self.controller, &mut self.peripheral))
+        }
     }
 }
 
 // Wifi: Type aliases and state structs for an Embassy Matter stack running over a Wifi network and BLE.
-mod wifi {
+pub mod wifi {
     use core::pin::pin;
 
     use edge_nal_embassy::Udp;
+
     use embassy_futures::select::select;
 
     use rs_matter_stack::matter::error::Error;
@@ -236,6 +357,36 @@ mod wifi {
 
         async fn provide(&mut self) -> (Self::Driver<'_>, Self::Controller<'_>) {
             (*self).provide().await
+        }
+    }
+
+    /// A Wifi driver provider that uses a pre-existing, already created Wifi driver and controller,
+    /// rather than creating them when the Matter stack needs them.
+    pub struct PreexistingWifiDriver<D, C>(D, C);
+
+    impl<D, C> PreexistingWifiDriver<D, C> {
+        /// Create a new instance of the `PreexistingWifiDriver` type.
+        pub const fn new(driver: D, controller: C) -> Self {
+            Self(driver, controller)
+        }
+    }
+
+    impl<D, C> WifiDriverProvider for PreexistingWifiDriver<D, C>
+    where
+        D: embassy_net::driver::Driver,
+        C: Controller<Data = WifiData>,
+    {
+        type Driver<'a>
+            = &'a mut D
+        where
+            Self: 'a;
+        type Controller<'a>
+            = &'a mut C
+        where
+            Self: 'a;
+
+        async fn provide(&mut self) -> (Self::Driver<'_>, Self::Controller<'_>) {
+            (&mut self.0, &mut self.1)
         }
     }
 
@@ -304,6 +455,115 @@ mod wifi {
             });
 
             select(&mut main, &mut run).coalesce().await
+        }
+    }
+
+    #[cfg(feature = "rp")]
+    pub mod rp {
+        use cyw43::{Control, JoinOptions, ScanOptions, ScanType};
+
+        use crate::matter::data_model::sdm::nw_commissioning::WiFiSecurity;
+        use crate::matter::error::{Error, ErrorCode};
+        use crate::matter::tlv::OctetsOwned;
+        use crate::matter::utils::storage::Vec;
+        use crate::stack::wireless::traits::{
+            Controller, NetworkCredentials, WifiData, WifiScanResult, WifiSsid, WirelessData,
+        };
+
+        /// An adaptor from the `cyw43` Wifi controller API to the `rs-matter` Wifi controller API
+        pub struct Cyw43WifiController<'a>(Control<'a>, Option<WifiSsid>);
+
+        impl<'a> Cyw43WifiController<'a> {
+            /// Create a new instance of the `Cyw43WifiController` type.
+            ///
+            /// # Arguments
+            /// - `controller` - The `cyw43` Wifi controller instance.
+            pub const fn new(controller: Control<'a>) -> Self {
+                Self(controller, None)
+            }
+        }
+
+        impl Controller for Cyw43WifiController<'_> {
+            type Data = WifiData;
+
+            async fn scan<F>(
+                &mut self,
+                network_id: Option<
+                    &<<Self::Data as WirelessData>::NetworkCredentials as NetworkCredentials>::NetworkId,
+                >,
+                mut callback: F,
+            ) -> Result<(), Error>
+            where
+                F: FnMut(Option<&<Self::Data as WirelessData>::ScanResult>) -> Result<(), Error>,
+            {
+                let mut scan_options = ScanOptions::default();
+                scan_options.scan_type = ScanType::Active;
+
+                if let Some(network_id) = network_id {
+                    scan_options.ssid = Some(network_id.0.as_str().try_into().unwrap());
+                }
+
+                let mut scanner = self.0.scan(scan_options).await;
+
+                while let Some(ap) = scanner.next().await {
+                    callback(Some(&WifiScanResult {
+                        ssid: WifiSsid(
+                            core::str::from_utf8(&ap.ssid[..ap.ssid_len as _])
+                                .unwrap()
+                                .try_into()
+                                .unwrap(),
+                        ),
+                        bssid: OctetsOwned {
+                            vec: Vec::from_slice(&ap.bssid).unwrap(),
+                        },
+                        channel: ap.chanspec,
+                        rssi: Some(ap.rssi as _),
+                        band: None,
+                        security: WiFiSecurity::Wpa2Personal, // TODO
+                    }))?;
+                }
+
+                callback(None)?;
+
+                Ok(())
+            }
+
+            async fn connect(
+                &mut self,
+                creds: &<Self::Data as WirelessData>::NetworkCredentials,
+            ) -> Result<(), Error> {
+                self.1 = None;
+
+                self.0
+                    .join(
+                        creds.ssid.0.as_str(),
+                        JoinOptions::new(creds.password.as_bytes()),
+                    )
+                    .await
+                    .map_err(to_err)?;
+                self.1 = Some(creds.ssid.clone());
+
+                Ok(())
+            }
+
+            async fn connected_network(
+                &mut self,
+            ) -> Result<
+                Option<
+                    <<Self::Data as WirelessData>::NetworkCredentials as NetworkCredentials>::NetworkId,
+                >,
+                Error,
+            >{
+                Ok(self.1.clone())
+            }
+
+            async fn stats(&mut self) -> Result<<Self::Data as WirelessData>::Stats, Error> {
+                Ok(None)
+            }
+        }
+
+        fn to_err(_: cyw43::ControlError) -> Error {
+            Error::new(ErrorCode::NoNetworkInterface)
         }
     }
 

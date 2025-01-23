@@ -28,6 +28,9 @@ jobs:
           toolchain: ${{ env.rust_toolchain }}
           components: rustfmt, clippy, rust-src
 
+      - name: Setup | Rust thumbv6m-none-eabi
+        run: rustup target add thumbv6m-none-eabi
+
       - name: Install libdbus
         run: sudo apt-get install -y libdbus-1-dev
 
@@ -46,17 +49,26 @@ jobs:
       - name: Build | Compile
         run: cd rs-matter-embassy; cargo build
 
-      - name: Examples-Build | Fmt Check
+      - name: Examples-ESP-Build | Fmt Check
         run: cd examples/esp; cargo fmt -- --check
 
-      - name: Examples-Build | Clippy
+      - name: Examples-ESP-Build | Clippy
         env:
           WIFI_SSID: "ssid"
           WIFI_PASS: "pass"
         run: cd examples/esp; cargo clippy --no-deps -- -Dwarnings
 
-      - name: Examples-Build | Compile
+      - name: Examples-ESP-Build | Compile
         env:
           WIFI_SSID: "ssid"
           WIFI_PASS: "pass"
         run: cd examples/esp; cargo build
+
+      - name: Examples-RP-Build | Fmt Check
+        run: cd examples/rp; cargo fmt -- --check
+
+      - name: Examples-RP-Build | Clippy
+        run: cd examples/rp; cargo clippy --no-deps -- -Dwarnings
+
+      - name: Examples-RP-Build | Compile
+        run: cd examples/rp; cargo build

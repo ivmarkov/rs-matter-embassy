@@ -1,0 +1,52 @@
+[package]
+name = "rs-matter-embassy-rp-examples"
+version = "0.1.0"
+edition = "2021"
+resolver = "2"
+
+[[bin]]
+name = "light"
+harness = false
+
+#[patch.'https://github.com/ivmarkov/rs-matter-stack']
+#rs-matter-stack = { path = "../../../rs-matter-stack" }
+
+[patch.crates-io]
+#rs-matter = { git = "https://github.com/project-chip/rs-matter" }
+rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "pase-breaks-provisioning" }
+
+[dependencies]
+embassy-executor = { version = "0.7", default-features = false, features = ["task-arena-size-98304", "arch-cortex-m", "executor-thread", "log", "executor-interrupt"] }
+embassy-time = { version = "0.4", default-features = false, features = ["log"] }
+embassy-rp = { version = "0.3", features = ["log", "unstable-pac", "time-driver", "critical-section-impl", "rp2040"] }
+embassy-futures = "0.1.1"
+embassy-sync = { version = "0.6", features = ["log"] }
+embassy-usb-logger = "0.4"
+
+bt-hci = { version = "0.2", default-features = false, features = ["log"] }
+cyw43 = { version = "0.3", features = ["firmware-logs", "bluetooth"] }
+cyw43-pio = "0.3"
+rs-matter-embassy = { path = "../../rs-matter-embassy", features = ["rp"] }
+embedded-alloc = "0.6"
+log = "0.4"
+
+cortex-m = { version = "0.7.6" }
+cortex-m-rt = "0.7.0"
+
+rtt-target = { version = "0.6", features = ["log"] }
+panic-probe = { version = "0.3", features = ["print-rtt"] }
+
+static_cell = "2"
+portable-atomic = { version = "1.5", features = ["critical-section"] }
+
+[build-dependencies]
+reqwest = { version = "0.12.9", features = ["blocking"]}
+
+[features]
+skip-cyw43-firmware = []
+
+[profile.dev]
+opt-level = "z"
+
+[profile.release]
+debug = 2

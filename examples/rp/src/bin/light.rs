@@ -11,14 +11,26 @@
 #![no_std]
 #![no_main]
 
+use core::mem::MaybeUninit;
 use core::pin::pin;
+use core::ptr::addr_of_mut;
+
+use bt_hci::controller::ExternalController;
+
+use cyw43_pio::PioSpi;
 
 use embassy_executor::Spawner;
 use embassy_futures::select::select;
+use embassy_rp::bind_interrupts;
+use embassy_rp::gpio::{Level, Output};
+use embassy_rp::peripherals::{DMA_CH0, PIO0, USB};
+use embassy_rp::pio::{InterruptHandler, Pio};
+use embassy_rp::usb::{self, Driver};
 use embassy_time::{Duration, Timer};
 
-use esp_backtrace as _;
-use esp_hal::{clock::CpuClock, timer::timg::TimerGroup};
+use embedded_alloc::LlffHeap;
+
+use panic_probe as _;
 
 use log::info;
 
@@ -30,16 +42,18 @@ use rs_matter_embassy::matter::data_model::objects::{Dataver, Endpoint, HandlerC
 use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
-use rs_matter_embassy::rand::esp::{esp_init_rand, esp_rand};
+use rs_matter_embassy::rand::rp::rp_rand;
 use rs_matter_embassy::stack::persist::DummyPersist;
 use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
 use rs_matter_embassy::stack::MdnsType;
-use rs_matter_embassy::wireless::esp::EspBleControllerProvider;
-use rs_matter_embassy::wireless::wifi::esp::EspWifiDriverProvider;
-use rs_matter_embassy::wireless::wifi::{EmbassyWifi, EmbassyWifiMatterStack};
-use rs_matter_embassy::wireless::EmbassyBle;
+use rs_matter_embassy::wireless::wifi::rp::Cyw43WifiController;
+use rs_matter_embassy::wireless::wifi::{
+    EmbassyWifi, EmbassyWifiMatterStack, PreexistingWifiDriver,
+};
+use rs_matter_embassy::wireless::{EmbassyBle, PreexistingBleController};
+use rtt_target::rtt_init_log;
 
 macro_rules! mk_static {
     ($t:ty) => {{
@@ -56,49 +70,80 @@ macro_rules! mk_static {
     }};
 }
 
-#[esp_hal_embassy::main]
-async fn main(_s: Spawner) {
-    esp_println::logger::init_logger(log::LevelFilter::Info);
+bind_interrupts!(struct Irqs {
+    PIO0_IRQ_0 => InterruptHandler<PIO0>;
+    USBCTRL_IRQ => usb::InterruptHandler<USB>;
+});
+
+#[global_allocator]
+static HEAP: LlffHeap = LlffHeap::empty();
+
+#[embassy_executor::main]
+async fn main(spawner: Spawner) {
+    // `rs-matter` uses the `x509` crate which (still) needs a few kilos of heap space
+    {
+        const HEAP_SIZE: usize = 8192;
+
+        static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
+        unsafe { HEAP.init(addr_of_mut!(HEAP_MEM) as usize, HEAP_SIZE) }
+    }
+
+    // == Step 1: ==
+    // Necessary `embassy-rp` and `cyw43` initialization boilerplate
+
+    let p = embassy_rp::init(Default::default());
+
+    rtt_init_log!(log::LevelFilter::Info);
+
+    let driver = Driver::new(p.USB, Irqs);
+    spawner.spawn(logger_task(driver)).unwrap();
 
     info!("Starting...");
 
-    // == Step 1: ==
-    // Necessary `esp-hal` and `esp-wifi` initialization boilerplate
+    #[cfg(feature = "skip-cyw43-firmware")]
+    let (fw, clm, btfw) = (&[], &[], &[]);
 
-    let peripherals = esp_hal::init({
-        let mut config = esp_hal::Config::default();
-        config.cpu_clock = CpuClock::max();
-        config
-    });
+    #[cfg(not(feature = "skip-cyw43-firmware"))]
+    let (fw, clm, btfw) = {
+        // IMPORTANT
+        //
+        // Download and make sure these files from https://github.com/embassy-rs/embassy/tree/main/cyw43-firmware
+        // are available in `./examples/rp-pico-w`. (should be automatic)
+        //
+        // IMPORTANT
+        let fw = include_bytes!("../../cyw43-firmware/43439A0.bin");
+        let clm = include_bytes!("../../cyw43-firmware/43439A0_clm.bin");
+        let btfw = include_bytes!("../../cyw43-firmware/43439A0_btfw.bin");
+        (fw, clm, btfw)
+    };
 
-    // For Wifi and for the only Matter dependency which needs (~4KB) alloc - `x509`
-    esp_alloc::heap_allocator!(100 * 1024);
+    let pwr = Output::new(p.PIN_23, Level::Low);
+    let cs = Output::new(p.PIN_25, Level::High);
+    let mut pio = Pio::new(p.PIO0, Irqs);
+    let spi = PioSpi::new(
+        &mut pio.common,
+        pio.sm0,
+        cyw43_pio::DEFAULT_CLOCK_DIVIDER,
+        pio.irq0,
+        cs,
+        p.PIN_24,
+        p.PIN_29,
+        p.DMA_CH0,
+    );
 
-    let timg0 = TimerGroup::new(peripherals.TIMG0);
-    let rng = esp_hal::rng::Rng::new(peripherals.RNG);
+    let state = mk_static!(cyw43::State, cyw43::State::new());
+    let (net_device, bt_device, mut control, runner) =
+        cyw43::new_with_bluetooth(state, pwr, spi, fw, btfw).await;
+    spawner.spawn(cyw43_task(runner)).unwrap();
+    control.init(clm).await;
 
-    // To erase generics, `Matter` takes a rand `fn` rather than a trait or a closure,
-    // so we need to initialize the global `rand` fn once
-    esp_init_rand(rng);
-
-    let init = esp_wifi::init(timg0.timer0, rng, peripherals.RADIO_CLK).unwrap();
-
-    #[cfg(not(feature = "esp32"))]
-    {
-        esp_hal_embassy::init(
-            esp_hal::timer::systimer::SystemTimer::new(peripherals.SYSTIMER).alarm0,
-        );
-    }
-    #[cfg(feature = "esp32")]
-    {
-        esp_hal_embassy::init(timg0.timer1);
-    }
+    let controller: ExternalController<_, 10> = ExternalController::new(bt_device);
 
     // == Step 2: ==
     // Statically allocate the Matter stack.
     // For MCUs, it is best to allocate it statically, so as to avoid program stack blowups (its memory footprint is ~ 35 to 50KB).
     // It is also (currently) a mandatory requirement when the wireless stack variation is used.
-    let stack = &*mk_static!(EmbassyWifiMatterStack<()>).init_with(EmbassyWifiMatterStack::init(
+    let stack = mk_static!(EmbassyWifiMatterStack<()>).init_with(EmbassyWifiMatterStack::init(
         &BasicInfoConfig {
             vid: TEST_VID,
             pid: TEST_PID,
@@ -114,7 +159,7 @@ async fn main(_s: Spawner) {
         &TEST_DEV_ATT,
         MdnsType::Builtin,
         epoch,
-        esp_rand,
+        rp_rand,
     ));
 
     // == Step 3: ==
@@ -149,10 +194,13 @@ async fn main(_s: Spawner) {
     //
     // This step can be repeated in that the stack can be stopped and started multiple times, as needed.
     let mut matter = pin!(stack.run(
-        // The Matter stack needs to instantiate an `embassy-net` `Driver` and `Controller`
-        EmbassyWifi::new(EspWifiDriverProvider::new(&init, peripherals.WIFI), stack),
+        // The Matter stack needs Wifi
+        EmbassyWifi::new(
+            PreexistingWifiDriver::new(net_device, Cyw43WifiController::new(control)),
+            stack
+        ),
         // The Matter stack needs BLE
-        EmbassyBle::new(EspBleControllerProvider::new(&init, peripherals.BT), stack),
+        EmbassyBle::new(PreexistingBleController::new(controller), stack),
         // The Matter stack needs a persister to store its state
         // `EmbassyPersist`+`EmbassyKvBlobStore` saves to a user-supplied NOR Flash region
         // However, for this demo and for simplicity, we use a dummy persister that does nothing
@@ -186,6 +234,18 @@ async fn main(_s: Spawner) {
 
     // Schedule the Matter run & the device loop together
     select(&mut matter, &mut device).coalesce().await.unwrap();
+}
+
+#[embassy_executor::task]
+async fn cyw43_task(
+    runner: cyw43::Runner<'static, Output<'static>, PioSpi<'static, PIO0, 0, DMA_CH0>>,
+) -> ! {
+    runner.run().await
+}
+
+#[embassy_executor::task]
+async fn logger_task(driver: Driver<'static, USB>) {
+    embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
 }
 
 /// Endpoint 0 (the root endpoint) always runs
