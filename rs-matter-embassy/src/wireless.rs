@@ -165,7 +165,10 @@ impl<C> BleControllerProvider for PreexistingBleController<C>
 where
     C: Controller,
 {
-    type Controller<'a> = ControllerRef<'a, C> where Self: 'a;
+    type Controller<'a>
+        = ControllerRef<'a, C>
+    where
+        Self: 'a;
 
     async fn provide(&mut self) -> Self::Controller<'_> {
         ControllerRef::new(&self.0)
@@ -226,19 +229,25 @@ where
 }
 
 impl<'a, C> TroubleBtpGattPeripheral<'a, CriticalSectionRawMutex, C>
-where 
+where
     C: Controller,
 {
-    pub fn new_for_stack<T, E>(controller: C, stack: &'a crate::wireless::EmbassyWirelessMatterStack<T, E>) -> Self 
-    where 
+    pub fn new_for_stack<T, E>(
+        controller: C,
+        stack: &'a crate::wireless::EmbassyWirelessMatterStack<T, E>,
+    ) -> Self
+    where
         T: WirelessConfig,
         <T::Data as WirelessData>::NetworkCredentials: Clone + for<'t> FromTLV<'t> + ToTLV,
         E: Embedding + 'static,
     {
-        Self::new(controller, stack.matter().rand(), stack.network().embedding().embedding().ble_context())
+        Self::new(
+            controller,
+            stack.matter().rand(),
+            stack.network().embedding().embedding().ble_context(),
+        )
     }
 }
-
 
 #[cfg(feature = "esp")]
 pub mod esp {
@@ -291,6 +300,7 @@ mod wifi {
     use core::pin::pin;
 
     use edge_nal_embassy::Udp;
+
     use embassy_futures::select::select;
 
     use rs_matter_stack::matter::error::Error;
@@ -366,8 +376,14 @@ mod wifi {
         D: embassy_net::driver::Driver,
         C: Controller<Data = WifiData>,
     {
-        type Driver<'a> = &'a mut D where Self: 'a;
-        type Controller<'a> = &'a mut C where Self: 'a;
+        type Driver<'a>
+            = &'a mut D
+        where
+            Self: 'a;
+        type Controller<'a>
+            = &'a mut C
+        where
+            Self: 'a;
 
         async fn provide(&mut self) -> (Self::Driver<'_>, Self::Controller<'_>) {
             (&mut self.0, &mut self.1)
@@ -444,18 +460,24 @@ mod wifi {
 
     #[cfg(feature = "rp")]
     pub mod rp {
-        use cyw43::Control;
+        use cyw43::{Control, JoinOptions, ScanOptions, ScanType};
 
-        use rs_matter::error::Error;
-        use rs_matter_stack::wireless::traits::{Controller, NetworkCredentials, WifiData, WifiSsid, WirelessData};
+        use crate::matter::data_model::sdm::nw_commissioning::WiFiSecurity;
+        use crate::matter::error::{Error, ErrorCode};
+        use crate::matter::tlv::OctetsOwned;
+        use crate::matter::utils::storage::Vec;
+        use crate::stack::wireless::traits::{
+            Controller, NetworkCredentials, WifiData, WifiScanResult, WifiSsid, WirelessData,
+        };
 
+        /// An adaptor from the `cyw43` Wifi controller API to the `rs-matter` Wifi controller API
         pub struct Cyw43WifiController<'a>(Control<'a>, Option<WifiSsid>);
 
         impl<'a> Cyw43WifiController<'a> {
-            /// Create a new instance of the `Esp32Controller` type.
+            /// Create a new instance of the `Cyw43WifiController` type.
             ///
             /// # Arguments
-            /// - `controller` - The `esp-wifi` Wifi controller instance.
+            /// - `controller` - The `cyw43` Wifi controller instance.
             pub const fn new(controller: Control<'a>) -> Self {
                 Self(controller, None)
             }
@@ -474,41 +496,34 @@ mod wifi {
             where
                 F: FnMut(Option<&<Self::Data as WirelessData>::ScanResult>) -> Result<(), Error>,
             {
-                // if !self.0.is_started().map_err(to_err)? {
-                //     self.0.start_async().await.map_err(to_err)?;
-                // }
+                let mut scan_options = ScanOptions::default();
+                scan_options.scan_type = ScanType::Active;
 
-                // let mut scan_config = ScanConfig::default();
-                // if let Some(network_id) = network_id {
-                //     scan_config.ssid = Some(network_id.0.as_str());
-                // }
+                if let Some(network_id) = network_id {
+                    scan_options.ssid = Some(network_id.0.as_str().try_into().unwrap());
+                }
 
-                // let (aps, _) = self
-                //     .0
-                //     .scan_with_config_async::<MAX_NETWORKS>(scan_config)
-                //     .await
-                //     .map_err(to_err)?;
+                let mut scanner = self.0.scan(scan_options).await;
 
-                // for ap in aps {
-                //     callback(Some(&WifiScanResult {
-                //         ssid: WifiSsid(ap.ssid),
-                //         bssid: OctetsOwned {
-                //             vec: Vec::from_slice(&ap.bssid).unwrap(),
-                //         },
-                //         channel: ap.channel as _,
-                //         rssi: Some(ap.signal_strength),
-                //         band: None,
-                //         security: match ap.auth_method {
-                //             Some(AuthMethod::None) => WiFiSecurity::Unencrypted,
-                //             Some(AuthMethod::WEP) => WiFiSecurity::Wep,
-                //             Some(AuthMethod::WPA) => WiFiSecurity::WpaPersonal,
-                //             Some(AuthMethod::WPA3Personal) => WiFiSecurity::Wpa3Personal,
-                //             _ => WiFiSecurity::Wpa2Personal,
-                //         },
-                //     }))?;
-                // }
+                while let Some(ap) = scanner.next().await {
+                    callback(Some(&WifiScanResult {
+                        ssid: WifiSsid(
+                            core::str::from_utf8(&ap.ssid[..ap.ssid_len as _])
+                                .unwrap()
+                                .try_into()
+                                .unwrap(),
+                        ),
+                        bssid: OctetsOwned {
+                            vec: Vec::from_slice(&ap.bssid).unwrap(),
+                        },
+                        channel: ap.chanspec,
+                        rssi: Some(ap.rssi as _),
+                        band: None,
+                        security: WiFiSecurity::Wpa2Personal, // TODO
+                    }))?;
+                }
 
-                // callback(None)?;
+                callback(None)?;
 
                 Ok(())
             }
@@ -519,26 +534,14 @@ mod wifi {
             ) -> Result<(), Error> {
                 self.1 = None;
 
-                // if self.0.is_started().map_err(to_err)? {
-                //     self.0.stop_async().await.map_err(to_err)?;
-                // }
-
-                // self.0
-                //     .set_configuration(&Configuration::Client(ClientConfiguration {
-                //         ssid: creds.ssid.0.clone(),
-                //         password: creds.password.clone(),
-                //         ..Default::default()
-                //     }))
-                //     .map_err(to_err)?;
-
-                // self.0.start_async().await.map_err(to_err)?;
-                // self.0.connect_async().await.map_err(to_err)?;
-
-                // self.1 = self
-                //     .0
-                //     .is_connected()
-                //     .map_err(to_err)?
-                //     .then_some(creds.ssid.clone());
+                self.0
+                    .join(
+                        creds.ssid.0.as_str(),
+                        JoinOptions::new(creds.password.as_bytes()),
+                    )
+                    .await
+                    .map_err(to_err)?;
+                self.1 = Some(creds.ssid.clone());
 
                 Ok(())
             }
@@ -559,9 +562,9 @@ mod wifi {
             }
         }
 
-        // fn to_err(_: WifiError) -> Error {
-        //     Error::new(ErrorCode::NoNetworkInterface)
-        // }
+        fn to_err(_: cyw43::ControlError) -> Error {
+            Error::new(ErrorCode::NoNetworkInterface)
+        }
     }
 
     // TODO:

@@ -33,7 +33,7 @@ pub mod rp {
 
     pub fn rp_rand(buf: &mut [u8]) {
         use rand_core::RngCore;
-        
+
         let mut rng = RoscRng;
         rng.fill_bytes(buf);
     }

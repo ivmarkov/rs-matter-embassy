@@ -458,7 +458,10 @@ where
         self.0.write_acl_data(packet)
     }
 
-    fn write_sync_data(&self, packet: &SyncPacket) -> impl Future<Output = Result<(), Self::Error>> {
+    fn write_sync_data(
+        &self,
+        packet: &SyncPacket,
+    ) -> impl Future<Output = Result<(), Self::Error>> {
         self.0.write_sync_data(packet)
     }
 
@@ -466,7 +469,10 @@ where
         self.0.write_iso_data(packet)
     }
 
-    fn read<'a>(&self, buf: &'a mut [u8]) -> impl Future<Output = Result<ControllerToHostPacket<'a>, Self::Error>> {
+    fn read<'a>(
+        &self,
+        buf: &'a mut [u8],
+    ) -> impl Future<Output = Result<ControllerToHostPacket<'a>, Self::Error>> {
         self.0.read(buf)
     }
 }
@@ -487,15 +493,24 @@ where
         self.0.write_iso_data(packet)
     }
 
-    fn try_write_acl_data(&self, packet: &AclPacket) -> Result<(), bt_hci::controller::blocking::TryError<Self::Error>> {
+    fn try_write_acl_data(
+        &self,
+        packet: &AclPacket,
+    ) -> Result<(), bt_hci::controller::blocking::TryError<Self::Error>> {
         self.0.try_write_acl_data(packet)
     }
 
-    fn try_write_sync_data(&self, packet: &SyncPacket) -> Result<(), bt_hci::controller::blocking::TryError<Self::Error>> {
+    fn try_write_sync_data(
+        &self,
+        packet: &SyncPacket,
+    ) -> Result<(), bt_hci::controller::blocking::TryError<Self::Error>> {
         self.0.try_write_sync_data(packet)
     }
 
-    fn try_write_iso_data(&self, packet: &IsoPacket) -> Result<(), bt_hci::controller::blocking::TryError<Self::Error>> {
+    fn try_write_iso_data(
+        &self,
+        packet: &IsoPacket,
+    ) -> Result<(), bt_hci::controller::blocking::TryError<Self::Error>> {
         self.0.try_write_iso_data(packet)
     }
 
@@ -503,7 +518,11 @@ where
         self.0.read(buf)
     }
 
-    fn try_read<'a>(&self, buf: &'a mut [u8]) -> Result<ControllerToHostPacket<'a>, bt_hci::controller::blocking::TryError<Self::Error>> {
+    fn try_read<'a>(
+        &self,
+        buf: &'a mut [u8],
+    ) -> Result<ControllerToHostPacket<'a>, bt_hci::controller::blocking::TryError<Self::Error>>
+    {
         self.0.try_read(buf)
     }
 }
@@ -513,7 +532,10 @@ where
     C: ControllerCmdSync<Q>,
     Q: SyncCmd + ?Sized,
 {
-    fn exec(&self, cmd: &Q) -> impl Future<Output = Result<Q::Return, bt_hci::cmd::Error<Self::Error>>> {
+    fn exec(
+        &self,
+        cmd: &Q,
+    ) -> impl Future<Output = Result<Q::Return, bt_hci::cmd::Error<Self::Error>>> {
         self.0.exec(cmd)
     }
 }
