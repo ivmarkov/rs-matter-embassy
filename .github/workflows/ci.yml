@@ -28,6 +28,9 @@ jobs:
           toolchain: ${{ env.rust_toolchain }}
           components: rustfmt, clippy, rust-src
 
+      - name: Setup | Rust thumbv6m-none-eabi
+        run: rustup target add thumbv6m-none-eabi
+
       - name: Install libdbus
         run: sudo apt-get install -y libdbus-1-dev
 
