@@ -22,7 +22,6 @@ use esp_hal::{clock::CpuClock, timer::timg::TimerGroup};
 
 use log::info;
 
-use rs_matter_embassy::ble::esp::EspBleControllerProvider;
 use rs_matter_embassy::epoch::epoch;
 use rs_matter_embassy::matter::data_model::cluster_basic_information::BasicInfoConfig;
 use rs_matter_embassy::matter::data_model::cluster_on_off;
@@ -37,8 +36,10 @@ use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
 use rs_matter_embassy::stack::MdnsType;
-use rs_matter_embassy::wireless::esp::EspWifiDriverProvider;
-use rs_matter_embassy::wireless::{EmbassyBle, EmbassyWifi, EmbassyWifiMatterStack};
+use rs_matter_embassy::wireless::esp::EspBleControllerProvider;
+use rs_matter_embassy::wireless::wifi::esp::EspWifiDriverProvider;
+use rs_matter_embassy::wireless::wifi::{EmbassyWifi, EmbassyWifiMatterStack};
+use rs_matter_embassy::wireless::EmbassyBle;
 
 macro_rules! mk_static {
     ($t:ty) => {{
@@ -97,7 +98,7 @@ async fn main(_s: Spawner) {
     // Statically allocate the Matter stack.
     // For MCUs, it is best to allocate it statically, so as to avoid program stack blowups (its memory footprint is ~ 35 to 50KB).
     // It is also (currently) a mandatory requirement when the wireless stack variation is used.
-    let stack = mk_static!(EmbassyWifiMatterStack<()>).init_with(EmbassyWifiMatterStack::init(
+    let stack = &*mk_static!(EmbassyWifiMatterStack<()>).init_with(EmbassyWifiMatterStack::init(
         &BasicInfoConfig {
             vid: TEST_VID,
             pid: TEST_PID,

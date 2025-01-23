@@ -18,8 +18,6 @@ use trouble_host::Controller;
 use crate::ble::{ControllerRef, TroubleBtpGattContext, TroubleBtpGattPeripheral};
 use crate::nal::{MatterStackResources, MatterUdpBuffers};
 
-pub use wifi::*;
-
 /// A type alias for an Embassy Matter stack running over a wireless network (Wifi or Thread) and BLE.
 pub type EmbassyWirelessMatterStack<'a, T, E = ()> = MatterStack<'a, EmbassyWirelessBle<T, E>>;
 
@@ -187,8 +185,10 @@ where
     T: BleControllerProvider,
 {
     /// Create a new instance of the `EmbassyBle` type.
-    pub fn new<E>(provider: T, stack: &'a EmbassyWifiMatterStack<'a, E>) -> Self
+    pub fn new<E, Q>(provider: T, stack: &'a EmbassyWirelessMatterStack<'a, Q, E>) -> Self
     where
+        Q: WirelessConfig,
+        <Q::Data as WirelessData>::NetworkCredentials: Clone + for<'t> FromTLV<'t> + ToTLV,
         E: Embedding + 'static,
     {
         Self::wrap(
@@ -296,7 +296,7 @@ pub mod esp {
 }
 
 // Wifi: Type aliases and state structs for an Embassy Matter stack running over a Wifi network and BLE.
-mod wifi {
+pub mod wifi {
     use core::pin::pin;
 
     use edge_nal_embassy::Udp;

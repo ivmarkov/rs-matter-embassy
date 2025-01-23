@@ -17,6 +17,7 @@ pub mod esp {
     }
 
     /// Generate random bytes using the esp-specific `rand` implementation
+    // TODO: Not cryptographically secure?
     pub fn esp_rand(buf: &mut [u8]) {
         RAND.lock(|rng| {
             let mut rng = rng.borrow_mut();
@@ -31,6 +32,7 @@ pub mod esp {
 pub mod rp {
     use embassy_rp::clocks::RoscRng;
 
+    // TODO: Not cryptographically secure?
     pub fn rp_rand(buf: &mut [u8]) {
         use rand_core::RngCore;
 

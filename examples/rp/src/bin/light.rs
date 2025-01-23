@@ -32,7 +32,6 @@ use embedded_alloc::LlffHeap;
 use log::info;
 
 use rs_matter_embassy::rand::rp::rp_rand;
-use rs_matter_embassy::wireless::rp::Cyw43WifiController;
 use rs_matter_embassy::epoch::epoch;
 use rs_matter_embassy::matter::data_model::cluster_basic_information::BasicInfoConfig;
 use rs_matter_embassy::matter::data_model::cluster_on_off;
@@ -46,7 +45,9 @@ use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
 use rs_matter_embassy::stack::MdnsType;
-use rs_matter_embassy::wireless::{EmbassyBle, EmbassyWifi, EmbassyWifiMatterStack, PreexistingBleController, PreexistingWifiDriver};
+use rs_matter_embassy::wireless::{EmbassyBle, PreexistingBleController};
+use rs_matter_embassy::wireless::wifi::rp::Cyw43WifiController;
+use rs_matter_embassy::wireless::wifi::{EmbassyWifi, EmbassyWifiMatterStack, PreexistingWifiDriver};
 
 macro_rules! mk_static {
     ($t:ty) => {{
