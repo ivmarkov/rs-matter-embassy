@@ -23,11 +23,14 @@ use embassy_executor::Spawner;
 use embassy_futures::select::select;
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
-use embassy_rp::peripherals::{DMA_CH0, PIO0};
+use embassy_rp::peripherals::{DMA_CH0, PIO0, USB};
 use embassy_rp::pio::{InterruptHandler, Pio};
+use embassy_rp::usb::{self, Driver};
 use embassy_time::{Duration, Timer};
 
 use embedded_alloc::LlffHeap;
+
+use panic_probe as _;
 
 use log::info;
 
@@ -48,6 +51,7 @@ use rs_matter_embassy::stack::MdnsType;
 use rs_matter_embassy::wireless::{EmbassyBle, PreexistingBleController};
 use rs_matter_embassy::wireless::wifi::rp::Cyw43WifiController;
 use rs_matter_embassy::wireless::wifi::{EmbassyWifi, EmbassyWifiMatterStack, PreexistingWifiDriver};
+use rtt_target::rtt_init_log;
 
 macro_rules! mk_static {
     ($t:ty) => {{
@@ -66,6 +70,7 @@ macro_rules! mk_static {
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
+    USBCTRL_IRQ => usb::InterruptHandler<USB>;
 });
 
 #[global_allocator]
@@ -81,12 +86,17 @@ async fn main(spawner: Spawner) {
         unsafe { HEAP.init(addr_of_mut!(HEAP_MEM) as usize, HEAP_SIZE) }
     }
 
-    info!("Starting...");
-
     // == Step 1: ==
     // Necessary `esp-hal` and `esp-wifi` initialization boilerplate
 
     let p = embassy_rp::init(Default::default());
+
+    rtt_init_log!(log::LevelFilter::Info);
+
+    let driver = Driver::new(p.USB, Irqs);
+    spawner.spawn(logger_task(driver)).unwrap();
+
+    info!("Starting...");
 
     #[cfg(feature = "skip-cyw43-firmware")]
     let (fw, clm, btfw) = (&[], &[], &[]);
@@ -181,7 +191,7 @@ async fn main(spawner: Spawner) {
     //
     // This step can be repeated in that the stack can be stopped and started multiple times, as needed.
     let mut matter = pin!(stack.run(
-        // The Matter stack needs to instantiate an `embassy-net` `Driver` and `Controller`
+        // The Matter stack needs Wifi
         EmbassyWifi::new(PreexistingWifiDriver::new(net_device, Cyw43WifiController::new(control)), stack),
         // The Matter stack needs BLE
         EmbassyBle::new(PreexistingBleController::new(controller), stack),
@@ -223,6 +233,11 @@ async fn main(spawner: Spawner) {
 #[embassy_executor::task]
 async fn cyw43_task(runner: cyw43::Runner<'static, Output<'static>, PioSpi<'static, PIO0, 0, DMA_CH0>>) -> ! {
     runner.run().await
+}
+
+#[embassy_executor::task]
+async fn logger_task(driver: Driver<'static, USB>) {
+    embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
 }
 
 /// Endpoint 0 (the root endpoint) always runs
