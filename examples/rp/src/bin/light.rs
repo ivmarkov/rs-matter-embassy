@@ -53,7 +53,6 @@ use rs_matter_embassy::wireless::wifi::{
     EmbassyWifi, EmbassyWifiMatterStack, PreexistingWifiDriver,
 };
 use rs_matter_embassy::wireless::{EmbassyBle, PreexistingBleController};
-use rtt_target::rtt_init_log;
 
 macro_rules! mk_static {
     ($t:ty) => {{
@@ -93,7 +92,7 @@ async fn main(spawner: Spawner) {
 
     let p = embassy_rp::init(Default::default());
 
-    rtt_init_log!(log::LevelFilter::Info);
+    //rtt_init_log!(log::LevelFilter::Info);
 
     let driver = Driver::new(p.USB, Irqs);
     spawner.spawn(logger_task(driver)).unwrap();
@@ -137,7 +136,7 @@ async fn main(spawner: Spawner) {
     spawner.spawn(cyw43_task(runner)).unwrap();
     control.init(clm).await;
 
-    let controller: ExternalController<_, 10> = ExternalController::new(bt_device);
+    let controller: ExternalController<_, 20> = ExternalController::new(bt_device);
 
     // == Step 2: ==
     // Statically allocate the Matter stack.
@@ -245,7 +244,7 @@ async fn cyw43_task(
 
 #[embassy_executor::task]
 async fn logger_task(driver: Driver<'static, USB>) {
-    embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
+    embassy_usb_logger::run!(4096, log::LevelFilter::Info, driver);
 }
 
 /// Endpoint 0 (the root endpoint) always runs

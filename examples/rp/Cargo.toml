@@ -46,7 +46,7 @@ reqwest = { version = "0.12.9", features = ["blocking"]}
 skip-cyw43-firmware = []
 
 [profile.dev]
-opt-level = "z"
+opt-level = 3
 
 [profile.release]
 debug = 2

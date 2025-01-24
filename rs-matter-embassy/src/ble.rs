@@ -61,6 +61,7 @@ struct MatterService {
 struct IndBuffer {
     addr: BtAddr,
     data: Vec<u8, MAX_MTU_SIZE>,
+    in_flight: bool,
 }
 
 impl IndBuffer {
@@ -69,6 +70,7 @@ impl IndBuffer {
         Self {
             addr: BtAddr([0; 6]),
             data: Vec::new(),
+            in_flight: false,
         }
     }
 
@@ -76,6 +78,7 @@ impl IndBuffer {
         init!(Self {
             addr: BtAddr([0; 6]),
             data <- Vec::init(),
+            in_flight: false,
         })
     }
 }
@@ -212,7 +215,7 @@ where
             loop {
                 match Self::advertise(service_name, service_adv_data, &mut peripheral).await {
                     Ok(conn) => {
-                        let events = Self::handle_events(&server, &conn, &mut callback);
+                        let events = Self::handle_events(&server, &conn, &self.context.ind, &mut callback);
                         let indications =
                             Self::handle_indications(&server, &conn, &self.context.ind);
 
@@ -250,15 +253,19 @@ where
         ind: &IfMutex<M, IndBuffer>,
     ) -> Result<(), trouble_host::Error> {
         loop {
-            let mut ind = ind.lock_if(|ind| !ind.data.is_empty()).await;
+            let mut ind = ind.lock_if(|ind| !ind.data.is_empty() && !ind.in_flight).await;
 
-            server
-                .matter_service
-                .c2
-                .notify_raw(server, conn, &ind.data)
-                .await?;
+            ind.in_flight = true;
+            
+            GattData::reply_unsolicited(
+                conn, 
+                AttRsp::Indicate {         
+                    handle: server.matter_service.c2.handle,
+                    data: &ind.data,
+                },
+            ).await?;
 
-            ind.data.clear();
+            info!("GATT: Indicate {:?} len {}", ind.data, ind.data.len());
         }
     }
 
@@ -269,6 +276,7 @@ where
     async fn handle_events<F>(
         server: &Server<'_>,
         conn: &Connection<'_>,
+        ind: &IfMutex<M, IndBuffer>,
         mut callback: F,
     ) -> Result<(), Error>
     where
@@ -282,44 +290,34 @@ where
         loop {
             match conn.next().await {
                 ConnectionEvent::Disconnected { reason } => {
+                    info!("GATT: Disconnect {:?}", reason);
+
                     callback(GattPeripheralEvent::NotifyUnsubscribed(to_bt_addr(
                         &conn.peer_address(),
                     )));
-                    info!("GATT: Disconnected: {:?}", reason);
                     break;
                 }
                 ConnectionEvent::Gatt { data } => {
                     let request = data.request();
 
-                    info!("GATT: Got event: {:?}", request);
+                    match request {
+                        AttReq::Write { handle, data: bytes } => {
+                            if handle == server.matter_service.c1.handle {
+                                info!("GATT: C1 Write {:?} len {} / MTU {}", bytes, bytes.len(), conn.att_mtu());
 
-                    if let AttReq::Write {
-                        handle,
-                        data: bytes,
-                    } = request
-                    {
-                        if handle == server.matter_service.c1.handle {
-                            info!("GATT: Write {:?} / MTU {}", bytes, conn.att_mtu());
+                                callback(GattPeripheralEvent::Write {
+                                    address: to_bt_addr(&conn.peer_address()),
+                                    data: bytes,
+                                    gatt_mtu: Some(conn.att_mtu()),
+                                });
 
-                            callback(GattPeripheralEvent::Write {
-                                address: to_bt_addr(&conn.peer_address()),
-                                data: bytes,
-                                gatt_mtu: Some(conn.att_mtu()),
-                            });
+                                data.reply(AttRsp::Write).await.unwrap();
 
-                            data.reply(AttRsp::Write).await.unwrap();
+                                continue;
+                            } else if Some(handle) == server.matter_service.c2.cccd_handle {
+                                let subscribed = bytes[0] != 0;
 
-                            continue;
-                        }
-                    }
-
-                    match data.process(server).await {
-                        Ok(Some(GattEvent::Write(event))) => {
-                            if Some(event.handle()) == server.matter_service.c2.cccd_handle {
-                                let data = event.data();
-                                let subscribed = data[0] != 0;
-
-                                info!("GATT: Write Event to CCC Characteristic: {:?}", data);
+                                info!("GATT: Write to C2 CCC descriptor: {:?}", bytes);
 
                                 if subscribed {
                                     callback(GattPeripheralEvent::NotifySubscribed(to_bt_addr(
@@ -330,12 +328,33 @@ where
                                         &conn.peer_address(),
                                     )));
                                 }
+
+                                data.reply(AttRsp::Write).await.unwrap();
+
+                                continue;
                             }
                         }
-                        Ok(_) => {}
-                        Err(e) => {
-                            warn!("GATT: Error processing event: {:?}", e);
+                        AttReq::ConfirmIndication => {
+                            info!("GATT: Confirm indication");
+
+                            ind
+                                .with(|ind| {
+                                    assert!(!ind.data.is_empty() && ind.in_flight);
+
+                                    ind.data.clear();
+                                    ind.in_flight = false;
+                    
+                                    Some(())
+                                })
+                                .await;
+                
+                            continue;
                         }
+                        _ => (),
+                    }
+
+                    if let Err(e) = data.process(server).await {
+                        warn!("GATT: Error processing event: {:?}", e);
                     }
                 }
             }
