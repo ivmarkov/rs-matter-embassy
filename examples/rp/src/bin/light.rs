@@ -78,6 +78,9 @@ bind_interrupts!(struct Irqs {
 #[global_allocator]
 static HEAP: LlffHeap = LlffHeap::empty();
 
+/// We need a bigger log ring-buffer or else the device QR code printout is half-lost
+const LOG_RINGBUF_SIZE: usize = 4096;
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     // `rs-matter` uses the `x509` crate which (still) needs a few kilos of heap space
@@ -96,7 +99,7 @@ async fn main(spawner: Spawner) {
     rtt_init_log!(
         log::LevelFilter::Info,
         rtt_target::ChannelMode::NoBlockSkip,
-        4096
+        LOG_RINGBUF_SIZE
     );
 
     // Uncomment to enable USB logging, and disable ^^^
@@ -250,7 +253,7 @@ async fn cyw43_task(
 
 #[embassy_executor::task]
 async fn logger_task(driver: Driver<'static, USB>) {
-    embassy_usb_logger::run!(4096, log::LevelFilter::Info, driver);
+    embassy_usb_logger::run!(LOG_RINGBUF_SIZE, log::LevelFilter::Info, driver);
 }
 
 /// Endpoint 0 (the root endpoint) always runs
