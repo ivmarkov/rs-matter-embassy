@@ -53,6 +53,7 @@ use rs_matter_embassy::wireless::wifi::{
     EmbassyWifi, EmbassyWifiMatterStack, PreexistingWifiDriver,
 };
 use rs_matter_embassy::wireless::{EmbassyBle, PreexistingBleController};
+use rtt_target::rtt_init_log;
 
 macro_rules! mk_static {
     ($t:ty) => {{
@@ -92,10 +93,15 @@ async fn main(spawner: Spawner) {
 
     let p = embassy_rp::init(Default::default());
 
-    //rtt_init_log!(log::LevelFilter::Info);
+    rtt_init_log!(
+        log::LevelFilter::Info,
+        rtt_target::ChannelMode::NoBlockSkip,
+        4096
+    );
 
-    let driver = Driver::new(p.USB, Irqs);
-    spawner.spawn(logger_task(driver)).unwrap();
+    // Uncomment to enable USB logging, and disable ^^^
+    // let driver = Driver::new(p.USB, Irqs);
+    // spawner.spawn(logger_task(driver)).unwrap();
 
     info!("Starting...");
 
