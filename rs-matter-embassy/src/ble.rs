@@ -51,9 +51,9 @@ struct Server {
 /// Matter service
 #[gatt_service(uuid = MATTER_BLE_SERVICE_UUID16)]
 struct MatterService {
-    #[characteristic(uuid = Uuid::Uuid128(C1_CHARACTERISTIC_UUID.to_le_bytes()), write)]
+    #[characteristic(uuid = C1_CHARACTERISTIC_UUID, write)]
     c1: External,
-    #[characteristic(uuid = Uuid::Uuid128(C2_CHARACTERISTIC_UUID.to_le_bytes()), write, indicate)]
+    #[characteristic(uuid = C2_CHARACTERISTIC_UUID, write, indicate)]
     c2: External,
 }
 
