@@ -43,7 +43,10 @@ use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
 use rs_matter_embassy::nal::net::driver::{Driver as _, HardwareAddress};
-use rs_matter_embassy::nal::{create_link_local_ipv6, multicast_mac_for_link_local_ipv6, MDNS_MULTICAST_MAC_IPV4, MDNS_MULTICAST_MAC_IPV6};
+use rs_matter_embassy::nal::{
+    create_link_local_ipv6, multicast_mac_for_link_local_ipv6, MDNS_MULTICAST_MAC_IPV4,
+    MDNS_MULTICAST_MAC_IPV6,
+};
 use rs_matter_embassy::rand::rp::rp_rand;
 use rs_matter_embassy::stack::persist::DummyPersist;
 use rs_matter_embassy::stack::test_device::{
@@ -144,10 +147,23 @@ async fn main(spawner: Spawner) {
     // cyw43 is a bit special in that it needs to have allowlisted all multicast MAC addresses
     // it should listen on. Therefore, add the mDNS ipv4 and ipv6 multicast MACs to the list,
     // as well as the ipv6 neightbour solicitation requests' MAC to the list
-    let HardwareAddress::Ethernet(mac) = net_device.hardware_address() else { unreachable!() };
-    control.add_multicast_address(MDNS_MULTICAST_MAC_IPV4).await.unwrap();
-    control.add_multicast_address(MDNS_MULTICAST_MAC_IPV6).await.unwrap();
-    control.add_multicast_address(multicast_mac_for_link_local_ipv6(&create_link_local_ipv6(&mac))).await.unwrap();
+    let HardwareAddress::Ethernet(mac) = net_device.hardware_address() else {
+        unreachable!()
+    };
+    control
+        .add_multicast_address(MDNS_MULTICAST_MAC_IPV4)
+        .await
+        .unwrap();
+    control
+        .add_multicast_address(MDNS_MULTICAST_MAC_IPV6)
+        .await
+        .unwrap();
+    control
+        .add_multicast_address(multicast_mac_for_link_local_ipv6(&create_link_local_ipv6(
+            &mac,
+        )))
+        .await
+        .unwrap();
 
     let controller: ExternalController<_, 20> = ExternalController::new(bt_device);
 

@@ -47,14 +47,14 @@ pub fn create_net_stack<const N: usize, D: Driver>(
 }
 
 /// The MAC address used for mDNS multicast queries over IPv4
-/// 
-/// Useful with wifi stack implementations (i.e. cyw43) that require explicit 
+///
+/// Useful with wifi stack implementations (i.e. cyw43) that require explicit
 /// allowlisting of the multicast MAC addresses they should be listening on.
 pub const MDNS_MULTICAST_MAC_IPV4: [u8; 6] = [0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb];
 
 /// The MAC address used for mDNS multicast queries over IPv6
-/// 
-/// Useful with wifi stack implementations (i.e. cyw43) that require explicit 
+///
+/// Useful with wifi stack implementations (i.e. cyw43) that require explicit
 /// allowlisting of the multicast MAC addresses they should be listening on.
 pub const MDNS_MULTICAST_MAC_IPV6: [u8; 6] = [0x33, 0x33, 0x00, 0x00, 0x00, 0xfb];
 
@@ -93,10 +93,10 @@ pub fn create_link_local_ipv6(mac: &[u8; 6]) -> Ipv6Addr {
 
 /// Get the multicast MAC address corresponding to the given IPv6 link-local address.
 ///
-/// Useful with Wifi stack implementations (i.e. cyw43) that require explicit 
+/// Useful with Wifi stack implementations (i.e. cyw43) that require explicit
 /// allowlisting of the multicast MAC addresses they should be listening on.
-/// 
-/// Note that the provided IP should be a link-local IP (fe80::/10) or else this 
+///
+/// Note that the provided IP should be a link-local IP (fe80::/10) or else this
 /// function would return a bogus result.
 pub fn multicast_mac_for_link_local_ipv6(ip: &Ipv6Addr) -> [u8; 6] {
     let mut mac = [0x33, 0x33, 0xff, 0, 0, 0];
