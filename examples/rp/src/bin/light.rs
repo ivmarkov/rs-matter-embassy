@@ -42,6 +42,8 @@ use rs_matter_embassy::matter::data_model::objects::{Dataver, Endpoint, HandlerC
 use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
+use rs_matter_embassy::nal::net::driver::{Driver as _, HardwareAddress};
+use rs_matter_embassy::nal::{create_link_local_ipv6, multicast_mac_for_link_local_ipv6, MDNS_MULTICAST_MAC_IPV4, MDNS_MULTICAST_MAC_IPV6};
 use rs_matter_embassy::rand::rp::rp_rand;
 use rs_matter_embassy::stack::persist::DummyPersist;
 use rs_matter_embassy::stack::test_device::{
@@ -97,7 +99,7 @@ async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
 
     rtt_init_log!(
-        log::LevelFilter::Info,
+        log::LevelFilter::Debug,
         rtt_target::ChannelMode::NoBlockSkip,
         LOG_RINGBUF_SIZE
     );
@@ -113,12 +115,6 @@ async fn main(spawner: Spawner) {
 
     #[cfg(not(feature = "skip-cyw43-firmware"))]
     let (fw, clm, btfw) = {
-        // IMPORTANT
-        //
-        // Download and make sure these files from https://github.com/embassy-rs/embassy/tree/main/cyw43-firmware
-        // are available in `./examples/rp-pico-w`. (should be automatic)
-        //
-        // IMPORTANT
         let fw = include_bytes!("../../cyw43-firmware/43439A0.bin");
         let clm = include_bytes!("../../cyw43-firmware/43439A0_clm.bin");
         let btfw = include_bytes!("../../cyw43-firmware/43439A0_btfw.bin");
@@ -131,7 +127,7 @@ async fn main(spawner: Spawner) {
     let spi = PioSpi::new(
         &mut pio.common,
         pio.sm0,
-        cyw43_pio::DEFAULT_CLOCK_DIVIDER,
+        cyw43_pio::DEFAULT_CLOCK_DIVIDER * 8,
         pio.irq0,
         cs,
         p.PIN_24,
@@ -144,6 +140,14 @@ async fn main(spawner: Spawner) {
         cyw43::new_with_bluetooth(state, pwr, spi, fw, btfw).await;
     spawner.spawn(cyw43_task(runner)).unwrap();
     control.init(clm).await;
+
+    // cyw43 is a bit special in that it needs to have allowlisted all multicast MAC addresses
+    // it should listen on. Therefore, add the mDNS ipv4 and ipv6 multicast MACs to the list,
+    // as well as the ipv6 neightbour solicitation requests' MAC to the list
+    let HardwareAddress::Ethernet(mac) = net_device.hardware_address() else { unreachable!() };
+    control.add_multicast_address(MDNS_MULTICAST_MAC_IPV4).await.unwrap();
+    control.add_multicast_address(MDNS_MULTICAST_MAC_IPV6).await.unwrap();
+    control.add_multicast_address(multicast_mac_for_link_local_ipv6(&create_link_local_ipv6(&mac))).await.unwrap();
 
     let controller: ExternalController<_, 20> = ExternalController::new(bt_device);
 

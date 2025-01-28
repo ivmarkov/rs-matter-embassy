@@ -46,6 +46,18 @@ pub fn create_net_stack<const N: usize, D: Driver>(
     net::new(driver, config, resources, seed)
 }
 
+/// The MAC address used for mDNS multicast queries over IPv4
+/// 
+/// Useful with wifi stack implementations (i.e. cyw43) that require explicit 
+/// allowlisting of the multicast MAC addresses they should be listening on.
+pub const MDNS_MULTICAST_MAC_IPV4: [u8; 6] = [0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb];
+
+/// The MAC address used for mDNS multicast queries over IPv6
+/// 
+/// Useful with wifi stack implementations (i.e. cyw43) that require explicit 
+/// allowlisting of the multicast MAC addresses they should be listening on.
+pub const MDNS_MULTICAST_MAC_IPV6: [u8; 6] = [0x33, 0x33, 0x00, 0x00, 0x00, 0xfb];
+
 /// Create a `Config` instance suitable for the `rs-matter` stack:
 /// - Ipv6 enabled with a static configuration that uses the link-local address derived from the MAC address
 /// - Ipv4 enabled with DHCPv4; structly speaking this is not necessary for the Matter stack, but it is
@@ -77,6 +89,20 @@ pub fn create_link_local_ipv6(mac: &[u8; 6]) -> Ipv6Addr {
         u16::from_be_bytes([0xfe, mac[3]]),
         u16::from_be_bytes([mac[4], mac[5]]),
     )
+}
+
+/// Get the multicast MAC address corresponding to the given IPv6 link-local address.
+///
+/// Useful with Wifi stack implementations (i.e. cyw43) that require explicit 
+/// allowlisting of the multicast MAC addresses they should be listening on.
+/// 
+/// Note that the provided IP should be a link-local IP (fe80::/10) or else this 
+/// function would return a bogus result.
+pub fn multicast_mac_for_link_local_ipv6(ip: &Ipv6Addr) -> [u8; 6] {
+    let mut mac = [0x33, 0x33, 0xff, 0, 0, 0];
+    mac[3..].copy_from_slice(&ip.octets()[13..]);
+
+    mac
 }
 
 #[cfg(test)]

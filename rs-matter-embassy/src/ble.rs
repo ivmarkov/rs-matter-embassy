@@ -16,7 +16,7 @@ use embassy_sync::blocking_mutex::raw::RawMutex;
 
 use embedded_io::ErrorType;
 
-use log::{info, warn};
+use log::{debug, info, warn};
 
 use rs_matter_stack::matter::error::{Error, ErrorCode};
 use rs_matter_stack::matter::transport::network::btp::{
@@ -269,7 +269,7 @@ where
             )
             .await?;
 
-            info!("GATT: Indicate {:?} len {}", ind.data, ind.data.len());
+            debug!("GATT: Indicate {:02x?} len {}", ind.data, ind.data.len());
         }
     }
 
@@ -310,8 +310,8 @@ where
                             data: bytes,
                         } => {
                             if handle == server.matter_service.c1.handle {
-                                info!(
-                                    "GATT: C1 Write {:?} len {} / MTU {}",
+                                debug!(
+                                    "GATT: C1 Write {:02x?} len {} / MTU {}",
                                     bytes,
                                     bytes.len(),
                                     conn.att_mtu()
@@ -329,7 +329,7 @@ where
                             } else if Some(handle) == server.matter_service.c2.cccd_handle {
                                 let subscribed = bytes[0] != 0;
 
-                                info!("GATT: Write to C2 CCC descriptor: {:?}", bytes);
+                                debug!("GATT: Write to C2 CCC descriptor: {:?}", bytes);
 
                                 if subscribed {
                                     callback(GattPeripheralEvent::NotifySubscribed(to_bt_addr(
@@ -347,7 +347,7 @@ where
                             }
                         }
                         AttReq::ConfirmIndication => {
-                            info!("GATT: Confirm indication");
+                            debug!("GATT: Confirm indication");
 
                             ind.with(|ind| {
                                 assert!(!ind.data.is_empty() && ind.in_flight);

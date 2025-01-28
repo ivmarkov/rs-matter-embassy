@@ -534,6 +534,8 @@ pub mod wifi {
             ) -> Result<(), Error> {
                 self.1 = None;
 
+                self.0.leave().await;
+
                 self.0
                     .join(
                         creds.ssid.0.as_str(),
