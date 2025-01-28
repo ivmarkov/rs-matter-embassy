@@ -107,7 +107,7 @@ async fn main(spawner: Spawner) {
         LOG_RINGBUF_SIZE
     );
 
-    // Uncomment to enable USB logging, and disable ^^^
+    // Uncomment to enable USB logging, and comment the `rtt_init_log!` call ^^^
     // let driver = Driver::new(p.USB, Irqs);
     // spawner.spawn(logger_task(driver)).unwrap();
 
