@@ -34,7 +34,9 @@ use trouble_host::prelude::*;
 use trouble_host::{self, Address, BleHostError, Controller, HostResources};
 
 const MAX_CONNECTIONS: usize = MAX_BTP_SESSIONS;
-const MAX_MTU_SIZE: usize = 251; // For now 512; // TODO const L2CAP_MTU: usize = 251;
+// esp32c6 has a bug so we can't go lower than 255
+// TODO: Make the MTU size a feature in future
+const MAX_MTU_SIZE: usize = 255;
 const MAX_CHANNELS: usize = 2;
 const ADV_SETS: usize = 1;
 
