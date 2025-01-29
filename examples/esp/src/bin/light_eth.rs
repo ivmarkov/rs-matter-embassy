@@ -10,7 +10,10 @@
 #![no_main]
 
 use core::env;
+use core::mem::MaybeUninit;
 use core::pin::pin;
+
+use alloc::boxed::Box;
 
 use embassy_executor::Spawner;
 use embassy_futures::select::select4;
@@ -43,27 +46,14 @@ use rs_matter_embassy::stack::utils::futures::IntoFaillble;
 use rs_matter_embassy::stack::MdnsType;
 use rs_matter_embassy::EmbassyEthMatterStack;
 
+extern crate alloc;
+
 const WIFI_SSID: &str = env!("WIFI_SSID");
 const WIFI_PASS: &str = env!("WIFI_PASS");
 
-macro_rules! mk_static {
-    ($t:ty) => {{
-        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
-        #[deny(unused_attributes)]
-        let x = STATIC_CELL.uninit();
-        x
-    }};
-    ($t:ty,$val:expr) => {{
-        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
-        #[deny(unused_attributes)]
-        let x = STATIC_CELL.uninit().write(($val));
-        x
-    }};
-}
-
 #[esp_hal_embassy::main]
 async fn main(_s: Spawner) {
-    logger::init_logger(true, log::LevelFilter::Info);
+    esp_println::logger::init_logger(log::LevelFilter::Info);
 
     info!("Starting...");
 
@@ -76,8 +66,10 @@ async fn main(_s: Spawner) {
         config
     });
 
-    // For Wifi and for the only Matter dependency which needs (~4KB) alloc - `x509`
-    esp_alloc::heap_allocator!(80 * 1024);
+    // Heap strictly necessary only for Wifi and for the only Matter dependency which needs (~4KB) alloc - `x509`
+    // However since `esp32` specifically has a disjoint heap which causes bss size troubles, it is easier
+    // to allocate the statics once from heap as well
+    init_heap();
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let mut rng = esp_hal::rng::Rng::new(peripherals.RNG);
@@ -99,7 +91,7 @@ async fn main(_s: Spawner) {
         esp_hal_embassy::init(timg0.timer1);
     }
 
-    let stack = mk_static!(EmbassyEthMatterStack<()>).init_with(EmbassyEthMatterStack::init(
+    let stack = Box::leak(Box::new_uninit()).init_with(EmbassyEthMatterStack::<()>::init(
         &BasicInfoConfig {
             vid: TEST_VID,
             pid: TEST_PID,
@@ -126,7 +118,7 @@ async fn main(_s: Spawner) {
     let (net_stack, mut net_runner) = create_net_stack(
         wifi_interface,
         ((rng.random() as u64) << 32) | rng.random() as u64,
-        mk_static!(MatterStackResources, MatterStackResources::new()),
+        Box::leak(Box::new_uninit()).init_with(MatterStackResources::new()),
     );
 
     // Our "light" on-off cluster.
@@ -162,7 +154,7 @@ async fn main(_s: Spawner) {
         // The Matter stack needs to open two UDP sockets
         Udp::new(
             net_stack,
-            mk_static!(MatterUdpBuffers, MatterUdpBuffers::new())
+            Box::leak(Box::new_uninit()).init_with(MatterUdpBuffers::new())
         ),
         // The Matter stack needs a persister to store its state
         // `EmbassyPersist`+`EmbassyKvBlobStore` saves to a user-supplied NOR Flash region
@@ -260,77 +252,35 @@ const NODE: Node = Node {
     ],
 };
 
-/// The default `EspLogger` from `esp_println` is not used as it does not
-/// print a timestamp and the module name. This custom logger is used instead.
-mod logger {
-    #![allow(unexpected_cfgs)]
-
-    use core::cell::Cell;
-
-    use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
-    use esp_println::println;
-
-    static COLORED: Mutex<CriticalSectionRawMutex, Cell<bool>> = Mutex::new(Cell::new(true));
-
-    /// Initialize the logger with the given maximum log level.
-    pub fn init_logger(colored: bool, level: log::LevelFilter) {
-        COLORED.lock(|c| c.set(colored));
-
-        unsafe { log::set_logger_racy(&EspIdfLikeLogger) }.unwrap();
+#[allow(static_mut_refs)]
+fn init_heap() {
+    fn add_region<const N: usize>(region: &'static mut MaybeUninit<[u8; N]>) {
         unsafe {
-            log::set_max_level_racy(level);
+            esp_alloc::HEAP.add_region(esp_alloc::HeapRegion::new(
+                region.as_mut_ptr() as *mut u8,
+                N,
+                esp_alloc::MemoryCapability::Internal.into(),
+            ));
         }
     }
 
-    struct EspIdfLikeLogger;
+    #[cfg(feature = "esp32")]
+    {
+        // The esp32 has two disjoint memory regions for heap
+        // Also, it has 64KB reserved for the BT stack in the first region, so we can't use that
 
-    impl log::Log for EspIdfLikeLogger {
-        fn enabled(&self, _metadata: &log::Metadata) -> bool {
-            true
-        }
+        static mut HEAP1: MaybeUninit<[u8; 30 * 1024]> = MaybeUninit::uninit();
+        #[link_section = ".dram2_uninit"]
+        static mut HEAP2: MaybeUninit<[u8; 96 * 1024]> = MaybeUninit::uninit();
 
-        #[allow(unused)]
-        fn log(&self, record: &log::Record) {
-            if !self.enabled(record.metadata()) {
-                return;
-            }
+        add_region(unsafe { &mut HEAP1 });
+        add_region(unsafe { &mut HEAP2 });
+    }
 
-            const RESET: &str = "\u{001B}[0m";
-            const RED: &str = "\u{001B}[31m";
-            const GREEN: &str = "\u{001B}[32m";
-            const YELLOW: &str = "\u{001B}[33m";
-            const BLUE: &str = "\u{001B}[34m";
-            const CYAN: &str = "\u{001B}[35m";
+    #[cfg(not(feature = "esp32"))]
+    {
+        static mut HEAP: MaybeUninit<[u8; 186 * 1024]> = MaybeUninit::uninit();
 
-            let colored = COLORED.lock(|c| c.get());
-
-            let (color, reset) = if colored {
-                (
-                    match record.level() {
-                        log::Level::Error => RED,
-                        log::Level::Warn => YELLOW,
-                        log::Level::Info => GREEN,
-                        log::Level::Debug => BLUE,
-                        log::Level::Trace => CYAN,
-                    },
-                    RESET,
-                )
-            } else {
-                ("", "")
-            };
-
-            println!(
-                //"{}{:.1} ({}) {}: {}{}",
-                "{}{:.1} {}: {}{}",
-                color,
-                record.level(),
-                //UtcTimestamp::new((&NOW).now()),
-                record.metadata().target(),
-                record.args(),
-                reset
-            );
-        }
-
-        fn flush(&self) {}
+        add_region(unsafe { &mut HEAP });
     }
 }

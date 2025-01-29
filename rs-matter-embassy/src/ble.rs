@@ -21,7 +21,7 @@ use log::{debug, info, warn};
 use rs_matter_stack::matter::error::{Error, ErrorCode};
 use rs_matter_stack::matter::transport::network::btp::{
     AdvData, GattPeripheral, GattPeripheralEvent, C1_CHARACTERISTIC_UUID, C2_CHARACTERISTIC_UUID,
-    MATTER_BLE_SERVICE_UUID16, MAX_BTP_SESSIONS,
+    MATTER_BLE_SERVICE_UUID16,
 };
 use rs_matter_stack::matter::transport::network::BtAddr;
 use rs_matter_stack::matter::utils::init::{init, Init};
@@ -33,10 +33,14 @@ use trouble_host::att::{AttReq, AttRsp};
 use trouble_host::prelude::*;
 use trouble_host::{self, Address, BleHostError, Controller, HostResources};
 
-const MAX_CONNECTIONS: usize = MAX_BTP_SESSIONS;
-// esp32c6 has a bug so we can't go lower than 255
+const MAX_CONNECTIONS: usize = 1;
+// Issue with esp32c6: we can't go lower than 255 on it
+// Issue with esp32: we can't go lower than 251 on it
 // TODO: Make the MTU size a feature in future
+#[cfg(any(target_arch = "riscv32", target_arch = "xtensa"))]
 const MAX_MTU_SIZE: usize = 255;
+#[cfg(not(any(target_arch = "riscv32", target_arch = "xtensa")))]
+const MAX_MTU_SIZE: usize = 131;
 const MAX_CHANNELS: usize = 2;
 const ADV_SETS: usize = 1;
 

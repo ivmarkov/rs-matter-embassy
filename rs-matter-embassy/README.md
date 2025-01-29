@@ -13,7 +13,7 @@ Everything necessary to run [`rs-matter`](https://github.com/project-chip/rs-mat
 
 ## Example
 
-(See also [All examples](examples))
+(See [All examples and how to build them](examples))
 
 ```rust
 //! An example utilizing the `EmbassyWifiMatterStack` struct.
@@ -29,8 +29,10 @@ Everything necessary to run [`rs-matter`](https://github.com/project-chip/rs-mat
 #![no_std]
 #![no_main]
 
+use core::mem::MaybeUninit;
 use core::pin::pin;
 
+use alloc::boxed::Box;
 use embassy_executor::Spawner;
 use embassy_futures::select::select;
 use embassy_time::{Duration, Timer};
@@ -59,26 +61,18 @@ use rs_matter_embassy::wireless::wifi::esp::EspWifiDriverProvider;
 use rs_matter_embassy::wireless::wifi::{EmbassyWifi, EmbassyWifiMatterStack};
 use rs_matter_embassy::wireless::EmbassyBle;
 
-macro_rules! mk_static {
-    ($t:ty) => {{
-        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
-        #[deny(unused_attributes)]
-        let x = STATIC_CELL.uninit();
-        x
-    }};
-    ($t:ty,$val:expr) => {{
-        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
-        #[deny(unused_attributes)]
-        let x = STATIC_CELL.uninit().write(($val));
-        x
-    }};
-}
+extern crate alloc;
 
 #[esp_hal_embassy::main]
 async fn main(_s: Spawner) {
     esp_println::logger::init_logger(log::LevelFilter::Info);
 
     info!("Starting...");
+
+    // Heap strictly necessary only for Wifi and for the only Matter dependency which needs (~4KB) alloc - `x509`
+    // However since `esp32` specifically has a disjoint heap which causes bss size troubles, it is easier
+    // to allocate the statics once from heap as well
+    init_heap();
 
     // == Step 1: ==
     // Necessary `esp-hal` and `esp-wifi` initialization boilerplate
@@ -88,9 +82,6 @@ async fn main(_s: Spawner) {
         config.cpu_clock = CpuClock::max();
         config
     });
-
-    // For Wifi and for the only Matter dependency which needs (~4KB) alloc - `x509`
-    esp_alloc::heap_allocator!(100 * 1024);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let rng = esp_hal::rng::Rng::new(peripherals.RNG);
@@ -113,10 +104,10 @@ async fn main(_s: Spawner) {
     }
 
     // == Step 2: ==
-    // Statically allocate the Matter stack.
+    // Allocate the Matter stack.
     // For MCUs, it is best to allocate it statically, so as to avoid program stack blowups (its memory footprint is ~ 35 to 50KB).
     // It is also (currently) a mandatory requirement when the wireless stack variation is used.
-    let stack = &*mk_static!(EmbassyWifiMatterStack<()>).init_with(EmbassyWifiMatterStack::init(
+    let stack = &*Box::leak(Box::new_uninit()).init_with(EmbassyWifiMatterStack::<()>::init(
         &BasicInfoConfig {
             vid: TEST_VID,
             pid: TEST_PID,
@@ -222,6 +213,39 @@ const NODE: Node = Node {
         },
     ],
 };
+
+#[allow(static_mut_refs)]
+fn init_heap() {
+    fn add_region<const N: usize>(region: &'static mut MaybeUninit<[u8; N]>) {
+        unsafe {
+            esp_alloc::HEAP.add_region(esp_alloc::HeapRegion::new(
+                region.as_mut_ptr() as *mut u8,
+                N,
+                esp_alloc::MemoryCapability::Internal.into(),
+            ));
+        }
+    }
+
+    #[cfg(feature = "esp32")]
+    {
+        // The esp32 has two disjoint memory regions for heap
+        // Also, it has 64KB reserved for the BT stack in the first region, so we can't use that
+
+        static mut HEAP1: MaybeUninit<[u8; 30 * 1024]> = MaybeUninit::uninit();
+        #[link_section = ".dram2_uninit"]
+        static mut HEAP2: MaybeUninit<[u8; 96 * 1024]> = MaybeUninit::uninit();
+
+        add_region(unsafe { &mut HEAP1 });
+        add_region(unsafe { &mut HEAP2 });
+    }
+
+    #[cfg(not(feature = "esp32"))]
+    {
+        static mut HEAP: MaybeUninit<[u8; 186 * 1024]> = MaybeUninit::uninit();
+
+        add_region(unsafe { &mut HEAP });
+    }
+}
 ```
 
 ## Future

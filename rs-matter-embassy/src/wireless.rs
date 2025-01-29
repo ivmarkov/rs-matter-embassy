@@ -460,9 +460,11 @@ pub mod wifi {
 
     #[cfg(feature = "rp")]
     pub mod rp {
-        use cyw43::{Control, JoinOptions, ScanOptions, ScanType};
+        use cyw43::{Control, JoinOptions, ScanOptions};
 
-        use crate::matter::data_model::sdm::nw_commissioning::WiFiSecurity;
+        use log::{error, info};
+
+        use crate::matter::data_model::sdm::nw_commissioning::{WiFiSecurity, WifiBand};
         use crate::matter::error::{Error, ErrorCode};
         use crate::matter::tlv::OctetsOwned;
         use crate::matter::utils::storage::Vec;
@@ -496,8 +498,10 @@ pub mod wifi {
             where
                 F: FnMut(Option<&<Self::Data as WirelessData>::ScanResult>) -> Result<(), Error>,
             {
+                info!("Wifi scan request");
+
                 let mut scan_options = ScanOptions::default();
-                scan_options.scan_type = ScanType::Active;
+                //scan_options.scan_type = ScanType::Active;
 
                 if let Some(network_id) = network_id {
                     scan_options.ssid = Some(network_id.0.as_str().try_into().unwrap());
@@ -505,8 +509,10 @@ pub mod wifi {
 
                 let mut scanner = self.0.scan(scan_options).await;
 
+                info!("Wifi scan started");
+
                 while let Some(ap) = scanner.next().await {
-                    callback(Some(&WifiScanResult {
+                    let result = WifiScanResult {
                         ssid: WifiSsid(
                             core::str::from_utf8(&ap.ssid[..ap.ssid_len as _])
                                 .unwrap()
@@ -518,12 +524,18 @@ pub mod wifi {
                         },
                         channel: ap.chanspec,
                         rssi: Some(ap.rssi as _),
-                        band: None,
+                        band: Some(WifiBand::B3G4),           // TODO
                         security: WiFiSecurity::Wpa2Personal, // TODO
-                    }))?;
+                    };
+
+                    callback(Some(&result))?;
+
+                    info!("Scan result {:?}", result);
                 }
 
                 callback(None)?;
+
+                info!("Wifi scan complete");
 
                 Ok(())
             }
@@ -535,6 +547,7 @@ pub mod wifi {
                 self.1 = None;
 
                 self.0.leave().await;
+                info!("Disconnected from current Wifi AP (if any)");
 
                 self.0
                     .join(
@@ -543,7 +556,12 @@ pub mod wifi {
                     )
                     .await
                     .map_err(to_err)?;
+
+                info!("Wifi connected");
+
                 self.1 = Some(creds.ssid.clone());
+
+                info!("Wifi connect complete");
 
                 Ok(())
             }
@@ -564,7 +582,8 @@ pub mod wifi {
             }
         }
 
-        fn to_err(_: cyw43::ControlError) -> Error {
+        fn to_err(e: cyw43::ControlError) -> Error {
+            error!("Wifi error: {:?}", e);
             Error::new(ErrorCode::NoNetworkInterface)
         }
     }
@@ -583,7 +602,9 @@ pub mod wifi {
             WifiError, WifiStaDevice,
         };
 
-        use crate::matter::data_model::sdm::nw_commissioning::WiFiSecurity;
+        use log::{error, info};
+
+        use crate::matter::data_model::sdm::nw_commissioning::{WiFiSecurity, WifiBand};
         use crate::matter::error::{Error, ErrorCode};
         use crate::matter::tlv::OctetsOwned;
         use crate::matter::utils::storage::Vec;
@@ -664,8 +685,11 @@ pub mod wifi {
             where
                 F: FnMut(Option<&<Self::Data as WirelessData>::ScanResult>) -> Result<(), Error>,
             {
+                info!("Wifi scan request");
+
                 if !self.0.is_started().map_err(to_err)? {
                     self.0.start_async().await.map_err(to_err)?;
+                    info!("Wifi started");
                 }
 
                 let mut scan_config = ScanConfig::default();
@@ -673,21 +697,26 @@ pub mod wifi {
                     scan_config.ssid = Some(network_id.0.as_str());
                 }
 
-                let (aps, _) = self
+                let (aps, len) = self
                     .0
                     .scan_with_config_async::<MAX_NETWORKS>(scan_config)
                     .await
                     .map_err(to_err)?;
 
+                info!(
+                    "Wifi scan complete, reporting {} results out of {len} total",
+                    aps.len()
+                );
+
                 for ap in aps {
-                    callback(Some(&WifiScanResult {
+                    let result = WifiScanResult {
                         ssid: WifiSsid(ap.ssid),
                         bssid: OctetsOwned {
                             vec: Vec::from_slice(&ap.bssid).unwrap(),
                         },
                         channel: ap.channel as _,
                         rssi: Some(ap.signal_strength),
-                        band: None,
+                        band: Some(WifiBand::B3G4), // TODO
                         security: match ap.auth_method {
                             Some(AuthMethod::None) => WiFiSecurity::Unencrypted,
                             Some(AuthMethod::WEP) => WiFiSecurity::Wep,
@@ -695,10 +724,16 @@ pub mod wifi {
                             Some(AuthMethod::WPA3Personal) => WiFiSecurity::Wpa3Personal,
                             _ => WiFiSecurity::Wpa2Personal,
                         },
-                    }))?;
+                    };
+
+                    callback(Some(&result))?;
+
+                    info!("Scan result {:?}", result);
                 }
 
                 callback(None)?;
+
+                info!("Wifi scan complete");
 
                 Ok(())
             }
@@ -711,6 +746,7 @@ pub mod wifi {
 
                 if self.0.is_started().map_err(to_err)? {
                     self.0.stop_async().await.map_err(to_err)?;
+                    info!("Wifi stopped");
                 }
 
                 self.0
@@ -720,15 +756,22 @@ pub mod wifi {
                         ..Default::default()
                     }))
                     .map_err(to_err)?;
+                info!("Wifi configuration updated");
 
                 self.0.start_async().await.map_err(to_err)?;
+                info!("Wifi started");
+
                 self.0.connect_async().await.map_err(to_err)?;
+
+                info!("Wifi connected");
 
                 self.1 = self
                     .0
                     .is_connected()
                     .map_err(to_err)?
                     .then_some(creds.ssid.clone());
+
+                info!("Wifi connect complete");
 
                 Ok(())
             }
@@ -749,7 +792,8 @@ pub mod wifi {
             }
         }
 
-        fn to_err(_: WifiError) -> Error {
+        fn to_err(e: WifiError) -> Error {
+            error!("Wifi error: {:?}", e);
             Error::new(ErrorCode::NoNetworkInterface)
         }
     }
