@@ -130,6 +130,9 @@ async fn main(spawner: Spawner) {
     let spi = PioSpi::new(
         &mut pio.common,
         pio.sm0,
+        // NOTE: There is a BLE packet corruption bug with yet-unknown reason.
+        // Lowering the pio-SPI clock by 8x seems to fix it or at least makes it
+        // rare enough so that it does not happen during the BLE commissioning.
         cyw43_pio::DEFAULT_CLOCK_DIVIDER * 8,
         pio.irq0,
         cs,
@@ -142,11 +145,11 @@ async fn main(spawner: Spawner) {
     let (net_device, bt_device, mut control, runner) =
         cyw43::new_with_bluetooth(state, pwr, spi, fw, btfw).await;
     spawner.spawn(cyw43_task(runner)).unwrap();
-    control.init(clm).await;
+    control.init(clm).await; // We should have the Wifi MAC address now
 
     // cyw43 is a bit special in that it needs to have allowlisted all multicast MAC addresses
     // it should listen on. Therefore, add the mDNS ipv4 and ipv6 multicast MACs to the list,
-    // as well as the ipv6 neightbour solicitation requests' MAC to the list
+    // as well as the ipv6 neightbour solicitation requests' MAC.
     let HardwareAddress::Ethernet(mac) = net_device.hardware_address() else {
         unreachable!()
     };
