@@ -51,6 +51,11 @@ probe-rs run --chip rp2040 target/thumbv6m-none-eabi/debug/light
 #### esp32
 
 ```sh
+# Wifi credentials should be valid only if you plan to run the `light_eth` "ethernet" example.
+# The `light` example gets your Wifi settings from the Matter Controller automatically.
+export WIFI_SSID=foo
+export WIFI_PASS=bar
+
 cargo install espup
 espup update
 
@@ -64,6 +69,11 @@ espflash monitor --elf target/xtensa-esp32-none-elf/debug/light
 #### esp32s3
 
 ```sh
+# Wifi credentials should be valid only if you plan to run the `light_eth` "ethernet" example.
+# The `light` example gets your Wifi settings from the Matter Controller automatically.
+export WIFI_SSID=foo
+export WIFI_PASS=bar
+
 cargo install espup
 espup update
 
@@ -77,6 +87,11 @@ espflash monitor --elf target/xtensa-esp32s3-none-elf/debug/light
 #### esp32c3
 
 ```sh
+# Wifi credentials should be valid only if you plan to run the `light_eth` "ethernet" example.
+# The `light` example gets your Wifi settings from the Matter Controller automatically.
+export WIFI_SSID=foo
+export WIFI_PASS=bar
+
 cd esp
 cargo +nightly build --target riscv32imc-unknown-none-elf --no-default-features --features esp32c3
 
@@ -87,6 +102,11 @@ espflash monitor --elf target/riscv32imc-unknown-none-elf/debug/light
 #### esp32c6
 
 ```sh
+# Wifi credentials should be valid only if you plan to run the `light_eth` "ethernet" example.
+# The `light` example gets your Wifi settings from the Matter Controller automatically.
+export WIFI_SSID=foo
+export WIFI_PASS=bar
+
 cd esp
 cargo +nightly build --target riscv32imac-unknown-none-elf --no-default-features --features esp32c6
 
