@@ -1,6 +1,6 @@
 # Examples
 
-![ACME](https://github.com/ivmarkov/rs-matter-stack/blob/master/examples/acme.jpg?raw=true)
+![ACME](https://github.com/ivmarkov/rs-matter-embassy/blob/master/examples/acme.jpg)
 
 The examples are tested and _should_ work on the rPI Pico W, esp32, esp32s3, esp32c3 and esp32c6.
 
