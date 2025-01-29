@@ -19,7 +19,6 @@ You need one of:
 * **Alexa**:
   * Alexa Echo Hub, Echo Dot or other Amazon Matter Controller
   * The Alexa app on your phone
-  * **NOTE**: Commissioning with Alexa currently only works with the `light_eth` example for Espressif MCUs. There is an issue with the Wifi scan command that needs to be fixed for the BLE + Wifi provisioning to operate.
 * **Apple**:
   * Apple TV or other Apple Matter Controller
   * An iPhone with the Apple HomeKit app

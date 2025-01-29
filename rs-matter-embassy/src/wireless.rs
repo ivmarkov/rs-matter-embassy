@@ -504,7 +504,12 @@ pub mod wifi {
                 //scan_options.scan_type = ScanType::Active;
 
                 if let Some(network_id) = network_id {
-                    scan_options.ssid = Some(network_id.0.as_str().try_into().unwrap());
+                    scan_options.ssid = Some(
+                        core::str::from_utf8(network_id.0.vec.as_slice())
+                            .unwrap_or("???")
+                            .try_into()
+                            .unwrap(),
+                    );
                 }
 
                 let mut scanner = self.0.scan(scan_options).await;
@@ -512,25 +517,29 @@ pub mod wifi {
                 info!("Wifi scan started");
 
                 while let Some(ap) = scanner.next().await {
-                    let result = WifiScanResult {
-                        ssid: WifiSsid(
-                            core::str::from_utf8(&ap.ssid[..ap.ssid_len as _])
-                                .unwrap()
-                                .try_into()
-                                .unwrap(),
-                        ),
-                        bssid: OctetsOwned {
-                            vec: Vec::from_slice(&ap.bssid).unwrap(),
-                        },
-                        channel: ap.chanspec,
-                        rssi: Some(ap.rssi as _),
-                        band: Some(WifiBand::B3G4),           // TODO
-                        security: WiFiSecurity::Wpa2Personal, // TODO
-                    };
+                    if ap.ssid_len > 0 {
+                        let result = WifiScanResult {
+                            ssid: WifiSsid(OctetsOwned {
+                                vec: Vec::from_slice(&ap.ssid[..ap.ssid_len as _]).unwrap(),
+                            }),
+                            bssid: OctetsOwned {
+                                vec: Vec::from_slice(&ap.bssid).unwrap(),
+                            },
+                            channel: ap.chanspec,
+                            rssi: Some(ap.rssi as _),
+                            band: Some(WifiBand::B2G4), // cyw43 only supports 2.4GHz
+                            security: WiFiSecurity::WPA2_PERSONAL, // TODO
+                        };
 
-                    callback(Some(&result))?;
+                        callback(Some(&result))?;
 
-                    info!("Scan result {:?}", result);
+                        info!("Scan result {:?}", result);
+                    } else {
+                        info!(
+                            "Skipping scan result for a hidden network {:02x?}",
+                            ap.bssid
+                        );
+                    }
                 }
 
                 callback(None)?;
@@ -551,7 +560,7 @@ pub mod wifi {
 
                 self.0
                     .join(
-                        creds.ssid.0.as_str(),
+                        core::str::from_utf8(creds.ssid.0.vec.as_slice()).unwrap_or("???"),
                         JoinOptions::new(creds.password.as_bytes()),
                     )
                     .await
@@ -694,7 +703,12 @@ pub mod wifi {
 
                 let mut scan_config = ScanConfig::default();
                 if let Some(network_id) = network_id {
-                    scan_config.ssid = Some(network_id.0.as_str());
+                    scan_config.ssid = Some(
+                        core::str::from_utf8(network_id.0.vec.as_slice())
+                            .unwrap_or("???")
+                            .try_into()
+                            .unwrap(),
+                    );
                 }
 
                 let (aps, len) = self
@@ -710,19 +724,28 @@ pub mod wifi {
 
                 for ap in aps {
                     let result = WifiScanResult {
-                        ssid: WifiSsid(ap.ssid),
+                        ssid: WifiSsid(OctetsOwned {
+                            vec: ap.ssid.as_bytes().try_into().unwrap(),
+                        }),
                         bssid: OctetsOwned {
                             vec: Vec::from_slice(&ap.bssid).unwrap(),
                         },
                         channel: ap.channel as _,
                         rssi: Some(ap.signal_strength),
-                        band: Some(WifiBand::B3G4), // TODO
+                        band: Some(WifiBand::B2G4), // TODO: Once c5 is out we can no longer hard-code this
                         security: match ap.auth_method {
-                            Some(AuthMethod::None) => WiFiSecurity::Unencrypted,
-                            Some(AuthMethod::WEP) => WiFiSecurity::Wep,
-                            Some(AuthMethod::WPA) => WiFiSecurity::WpaPersonal,
-                            Some(AuthMethod::WPA3Personal) => WiFiSecurity::Wpa3Personal,
-                            _ => WiFiSecurity::Wpa2Personal,
+                            Some(AuthMethod::None) => WiFiSecurity::UNENCRYPTED,
+                            Some(AuthMethod::WEP) => WiFiSecurity::WEP,
+                            Some(AuthMethod::WPA) => WiFiSecurity::WPA_PERSONAL,
+                            Some(AuthMethod::WPA2Personal) => WiFiSecurity::WPA2_PERSONAL,
+                            Some(AuthMethod::WPAWPA2Personal) => {
+                                WiFiSecurity::WPA_PERSONAL | WiFiSecurity::WPA2_PERSONAL
+                            }
+                            Some(AuthMethod::WPA2WPA3Personal) => {
+                                WiFiSecurity::WPA2_PERSONAL | WiFiSecurity::WPA3_PERSONAL
+                            }
+                            Some(AuthMethod::WPA2Enterprise) => WiFiSecurity::WPA2_PERSONAL,
+                            _ => WiFiSecurity::WPA2_PERSONAL, // Best guess
                         },
                     };
 
@@ -751,7 +774,10 @@ pub mod wifi {
 
                 self.0
                     .set_configuration(&Configuration::Client(ClientConfiguration {
-                        ssid: creds.ssid.0.clone(),
+                        ssid: core::str::from_utf8(creds.ssid.0.vec.as_slice())
+                            .unwrap_or("???")
+                            .try_into()
+                            .unwrap(),
                         password: creds.password.clone(),
                         ..Default::default()
                     }))
