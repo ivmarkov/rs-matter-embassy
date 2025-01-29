@@ -553,16 +553,17 @@ pub mod wifi {
                 &mut self,
                 creds: &<Self::Data as WirelessData>::NetworkCredentials,
             ) -> Result<(), Error> {
+                let ssid = core::str::from_utf8(creds.ssid.0.vec.as_slice()).unwrap_or("???");
+
+                info!("Wifi connect request for SSID {ssid}");
+
                 self.1 = None;
 
                 self.0.leave().await;
                 info!("Disconnected from current Wifi AP (if any)");
 
                 self.0
-                    .join(
-                        core::str::from_utf8(creds.ssid.0.vec.as_slice()).unwrap_or("???"),
-                        JoinOptions::new(creds.password.as_bytes()),
-                    )
+                    .join(ssid, JoinOptions::new(creds.password.as_bytes())) // TODO: Try with something else besides Wpa2Wpa3
                     .await
                     .map_err(to_err)?;
 
@@ -765,6 +766,10 @@ pub mod wifi {
                 &mut self,
                 creds: &<Self::Data as WirelessData>::NetworkCredentials,
             ) -> Result<(), Error> {
+                let ssid = core::str::from_utf8(creds.ssid.0.vec.as_slice()).unwrap_or("???");
+
+                info!("Wifi connect request for SSID {ssid}");
+
                 self.1 = None;
 
                 if self.0.is_started().map_err(to_err)? {
@@ -774,12 +779,9 @@ pub mod wifi {
 
                 self.0
                     .set_configuration(&Configuration::Client(ClientConfiguration {
-                        ssid: core::str::from_utf8(creds.ssid.0.vec.as_slice())
-                            .unwrap_or("???")
-                            .try_into()
-                            .unwrap(),
+                        ssid: ssid.try_into().unwrap(),
                         password: creds.password.clone(),
-                        ..Default::default()
+                        ..Default::default() // TODO: Try something else besides WPA2-Personal
                     }))
                     .map_err(to_err)?;
                 info!("Wifi configuration updated");
