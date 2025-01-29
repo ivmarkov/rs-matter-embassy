@@ -1,11 +1,14 @@
 # Examples
 
-The examples are tested and _should_ work on the rPI Pico W, esp32, esp32s3, esp32c3 and esp32c6
+The examples are tested and _should_ work on the rPI Pico W, esp32, esp32s3, esp32c3 and esp32c6.
 
 With that said, it is still early days for both `rs-matter` and `trouble` 
-(the bare-metal BLE stack in use) so you might face issues during initial commissioning.
+(the bare-metal BLE stack in use) so you might face issues during the initial commissioning.
 
 Please [report](https://github.com/ivmarkov/rs-matter-embassy/issues) those!
+
+Also, currently the persistance is (temporarily) switched off, so if you stop/restart the MCU, you'll have to go over
+the commissioning process again, by first removing your device from your Matter Controller.
 
 ## Matter Controller
 
