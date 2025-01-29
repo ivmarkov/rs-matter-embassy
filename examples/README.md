@@ -1,22 +1,23 @@
-# Examples for Espressif MCUs
+# Examples
 
 The examples are tested and _should_ work on the rPI Pico W, esp32, esp32s3, esp32c3 and esp32c6
 
 With that said, it is still early days for both `rs-matter` and `trouble` 
 (the bare-metal BLE stack in use) so you might face issues during initial commissioning.
 
-Please [report]() those!
+Please [report](https://github.com/ivmarkov/rs-matter-embassy/issues) those!
 
 ## Matter Controller
 
 You need one of:
-* Google:
+* **Google**:
   * Google Home/Nest or other Google Matter Controller
   * The Google Home app on your phone
-* Alexa
+* **Alexa**:
   * Alexa Echo Hub, Echo Dot or other Amazon Matter Controller
   * The Alexa app on your phone
-* Apple
+  * **NOTE**: Commissioning with Alexa currently only works with the `light_eth` example for Espressif MCUs. There is an issue with the Wifi scan command that needs to be fixed for the BLE + Wifi provisioning to operate.
+* **Apple**:
   * Apple TV or other Apple Matter Controller
   * An iPhone with the Apple HomeKit app
 
