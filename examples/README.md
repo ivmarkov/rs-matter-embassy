@@ -1,5 +1,7 @@
 # Examples
 
+![ACME](https://github.com/ivmarkov/rs-matter-stack/blob/master/examples/acme.jpg?raw=true)
+
 The examples are tested and _should_ work on the rPI Pico W, esp32, esp32s3, esp32c3 and esp32c6.
 
 With that said, it is still early days for both `rs-matter` and `trouble` 
