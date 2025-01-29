@@ -23,7 +23,7 @@ You need one of:
   * The Alexa app on your phone
 * **Apple**:
   * Apple TV or other Apple Matter Controller
-  * An iPhone with the Apple HomeKit app
+  * An iPhone with the Apple Home app
 
 Once you build and flash the firmware, follow the instructions in the phone app.
 
