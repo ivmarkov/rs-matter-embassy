@@ -768,6 +768,11 @@ pub mod wifi {
             ) -> Result<(), Error> {
                 let ssid = core::str::from_utf8(creds.ssid.0.vec.as_slice()).unwrap_or("???");
 
+                if self.1.as_ref() == Some(&creds.ssid) && self.0.is_connected().map_err(to_err)? {
+                    info!("Wifi connect request for an already connected SSID {ssid}");
+                    return Ok(());
+                }
+
                 info!("Wifi connect request for SSID {ssid}");
 
                 self.1 = None;
