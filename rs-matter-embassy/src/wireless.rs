@@ -658,12 +658,17 @@ pub mod wifi {
                 Self: 't;
 
             async fn provide(&mut self) -> (Self::Driver<'_>, Self::Controller<'_>) {
-                let (wifi_interface, controller) = esp_wifi::wifi::new_with_mode(
+                let (wifi_interface, mut controller) = esp_wifi::wifi::new_with_mode(
                     self.controller,
                     &mut self.peripheral,
                     WifiStaDevice,
                 )
                 .unwrap();
+
+                // esp32c6-specific - need to boost the power to get a good signal
+                controller
+                    .set_power_saving(esp_wifi::config::PowerSaveMode::None)
+                    .unwrap();
 
                 (wifi_interface, EspWifiController::new(controller))
             }
