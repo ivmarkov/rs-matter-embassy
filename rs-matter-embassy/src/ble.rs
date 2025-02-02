@@ -29,7 +29,7 @@ use rs_matter_stack::matter::utils::rand::Rand;
 use rs_matter_stack::matter::utils::storage::Vec;
 use rs_matter_stack::matter::utils::sync::IfMutex;
 
-use trouble_host::att::{AttReq, AttRsp};
+use trouble_host::att::{AttCfm, AttClient, AttReq, AttRsp, AttUns};
 use trouble_host::prelude::*;
 use trouble_host::{self, Address, BleHostError, Controller, HostResources};
 
@@ -266,9 +266,9 @@ where
 
             ind.in_flight = true;
 
-            GattData::reply_unsolicited(
+            GattData::send_unsolicited(
                 conn,
-                AttRsp::Indicate {
+                AttUns::Indicate {
                     handle: server.matter_service.c2.handle,
                     data: &ind.data,
                 },
@@ -308,13 +308,13 @@ where
                     break;
                 }
                 ConnectionEvent::Gatt { data } => {
-                    let request = data.request();
+                    let icoming = data.incoming();
 
-                    match request {
-                        AttReq::Write {
+                    match icoming {
+                        AttClient::Request(AttReq::Write {
                             handle,
                             data: bytes,
-                        } => {
+                        }) => {
                             if handle == server.matter_service.c1.handle {
                                 debug!(
                                     "GATT: C1 Write {:02x?} len {} / MTU {}",
@@ -352,7 +352,7 @@ where
                                 continue;
                             }
                         }
-                        AttReq::ConfirmIndication => {
+                        AttClient::Confirmation(AttCfm::ConfirmIndication) => {
                             debug!("GATT: Confirm indication");
 
                             ind.with(|ind| {
