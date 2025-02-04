@@ -36,14 +36,15 @@ Upon successful commissioning, you should end up with a Light device which you c
 
 ## How to build and flash
 
-### rPI Pico W
+### rPI Pico and Pico W
 
-(Support for the stock rPI via the W5500 ethernet adapter coming later.)
+(The stock Pico only supports Ethernet using the `light_eth` example and W5500)
 
 ```sh
 cd rp
 cargo +nightly build
 
+# Replace `light` with `light_eth` below to flash the Ethernet example
 probe-rs run --chip rp2040 target/thumbv6m-none-eabi/debug/light
 ```
 
@@ -63,6 +64,7 @@ espup update
 cd esp
 cargo +esp build --target xtensa-esp32-none-elf --no-default-features --features esp32
 
+# Replace `light` with `light_eth` below to flash the "Ethernet" example
 espflash flash target/xtensa-esp32-none-elf/debug/light --baud 1500000
 espflash monitor --elf target/xtensa-esp32-none-elf/debug/light
 ```
@@ -81,6 +83,7 @@ espup update
 cd esp
 cargo +esp build --target xtensa-esp32s3-none-elf --no-default-features --features esp32s3
 
+# Replace `light` with `light_eth` below to flash the "Ethernet" example
 espflash flash target/xtensa-esp32s3-none-elf/debug/light --baud 1500000
 espflash monitor --elf target/xtensa-esp32s3-none-elf/debug/light
 ```
@@ -96,6 +99,7 @@ export WIFI_PASS=bar
 cd esp
 cargo +nightly build --target riscv32imc-unknown-none-elf --no-default-features --features esp32c3
 
+# Replace `light` with `light_eth` below to flash the "Ethernet" example
 espflash flash target/riscv32imc-unknown-none-elf/debug/light --baud 1500000
 espflash monitor --elf target/riscv32imc-unknown-none-elf/debug/light
 ```
@@ -111,6 +115,7 @@ export WIFI_PASS=bar
 cd esp
 cargo +nightly build --target riscv32imac-unknown-none-elf --no-default-features --features esp32c6
 
+# Replace `light` with `light_eth` below to flash the "Ethernet" example
 espflash flash target/riscv32imac-unknown-none-elf/debug/light --baud 1500000
 espflash monitor --elf target/riscv32imac-unknown-none-elf/debug/light
 ```

@@ -1,11 +1,8 @@
-//! An example utilizing the `EmbassyWifiMatterStack` struct.
+//! An example utilizing the `EmbassyEthMatterStack` struct.
 //!
-//! As the name suggests, this Matter stack assembly uses Wifi as the main transport,
-//! and thus BLE for commissioning.
+//! As the name suggests, this Matter stack assembly uses Ethernet as the main transport as well as for commissioning.
 //!
-//! If you want to use Ethernet, utilize `EmbassyEthMatterStack` instead.
-//! If you want to use non-concurrent commissioning, utilize `EmbassyWifiNCMatterStack` instead
-//! (Note: Alexa does not work (yet) with non-concurrent commissioning.)
+//! If you want to use Wifi (and BLE), utilize `EmbassyWifiMatterStack` instead.
 //!
 //! The example implements a fictitious Light device (an On-Off Matter cluster).
 #![no_std]
@@ -15,24 +12,27 @@ use core::mem::MaybeUninit;
 use core::pin::pin;
 use core::ptr::addr_of_mut;
 
-use bt_hci::controller::ExternalController;
-
-use cyw43_pio::PioSpi;
-
 use embassy_executor::Spawner;
-use embassy_futures::select::select;
+use embassy_futures::select::select3;
+use embassy_net_wiznet::chip::W5500;
+use embassy_net_wiznet::{Runner, State};
 use embassy_rp::bind_interrupts;
-use embassy_rp::gpio::{Level, Output};
-use embassy_rp::peripherals::{DMA_CH0, PIO0, USB};
-use embassy_rp::pio::{InterruptHandler, Pio};
+use embassy_rp::clocks::RoscRng;
+use embassy_rp::gpio::{Input, Level, Output, Pull};
+use embassy_rp::peripherals::{SPI0, USB};
+use embassy_rp::spi::{Async, Config as SpiConfig, Spi};
 use embassy_rp::usb::{self, Driver};
-use embassy_time::{Duration, Timer};
+use embassy_time::{Delay, Duration, Timer};
 
 use embedded_alloc::LlffHeap;
 
-use panic_probe as _;
+use embedded_hal_bus::spi::ExclusiveDevice;
 
 use log::info;
+
+use panic_probe as _;
+
+use rand_core::RngCore;
 
 use rs_matter_embassy::epoch::epoch;
 use rs_matter_embassy::matter::data_model::cluster_basic_information::BasicInfoConfig;
@@ -42,22 +42,15 @@ use rs_matter_embassy::matter::data_model::objects::{Dataver, Endpoint, HandlerC
 use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
-use rs_matter_embassy::nal::net::driver::{Driver as _, HardwareAddress};
-use rs_matter_embassy::nal::{
-    create_link_local_ipv6, multicast_mac_for_link_local_ipv6, MDNS_MULTICAST_MAC_IPV4,
-    MDNS_MULTICAST_MAC_IPV6,
-};
+use rs_matter_embassy::nal::{create_net_stack, MatterStackResources, MatterUdpBuffers, Udp};
+use rs_matter_embassy::netif::EmbassyNetif;
 use rs_matter_embassy::rand::rp::rp_rand;
 use rs_matter_embassy::stack::persist::DummyPersist;
 use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
 use rs_matter_embassy::stack::MdnsType;
-use rs_matter_embassy::wireless::wifi::rp::Cyw43WifiController;
-use rs_matter_embassy::wireless::wifi::{
-    EmbassyWifi, EmbassyWifiMatterStack, PreexistingWifiDriver,
-};
-use rs_matter_embassy::wireless::{EmbassyBle, PreexistingBleController};
+use rs_matter_embassy::EmbassyEthMatterStack;
 
 use rtt_target::rtt_init_log;
 
@@ -77,7 +70,6 @@ macro_rules! mk_static {
 }
 
 bind_interrupts!(struct Irqs {
-    PIO0_IRQ_0 => InterruptHandler<PIO0>;
     USBCTRL_IRQ => usb::InterruptHandler<USB>;
 });
 
@@ -98,7 +90,7 @@ async fn main(spawner: Spawner) {
     }
 
     // == Step 1: ==
-    // Necessary `embassy-rp` and `cyw43` initialization boilerplate
+    // Necessary `embassy-rp` and `w5500` initialization boilerplate
 
     let p = embassy_rp::init(Default::default());
 
@@ -114,68 +106,40 @@ async fn main(spawner: Spawner) {
 
     info!("Starting...");
 
-    #[cfg(feature = "skip-cyw43-firmware")]
-    let (fw, clm, btfw) = (&[], &[], &[]);
+    let mut spi_cfg = SpiConfig::default();
+    spi_cfg.frequency = 50_000_000;
+    let (miso, mosi, clk) = (p.PIN_16, p.PIN_19, p.PIN_18);
+    let spi = Spi::new(p.SPI0, clk, mosi, miso, p.DMA_CH0, p.DMA_CH1, spi_cfg);
+    let cs = Output::new(p.PIN_17, Level::High);
+    let w5500_int = Input::new(p.PIN_21, Pull::Up);
+    let w5500_reset = Output::new(p.PIN_20, Level::High);
 
-    #[cfg(not(feature = "skip-cyw43-firmware"))]
-    let (fw, clm, btfw) = {
-        let fw = include_bytes!("../../cyw43-firmware/43439A0.bin");
-        let clm = include_bytes!("../../cyw43-firmware/43439A0_clm.bin");
-        let btfw = include_bytes!("../../cyw43-firmware/43439A0_btfw.bin");
-        (fw, clm, btfw)
-    };
+    let (device, runner) = embassy_net_wiznet::new(
+        [0x02, 0x00, 0x00, 0x00, 0x00, 0x00],
+        mk_static!(State::<8, 8>, State::new()),
+        ExclusiveDevice::new(spi, cs, Delay),
+        w5500_int,
+        w5500_reset,
+    )
+    .await
+    .unwrap();
 
-    let pwr = Output::new(p.PIN_23, Level::Low);
-    let cs = Output::new(p.PIN_25, Level::High);
-    let mut pio = Pio::new(p.PIO0, Irqs);
-    let spi = PioSpi::new(
-        &mut pio.common,
-        pio.sm0,
-        // NOTE: There is a BLE packet corruption bug with yet-unknown reason.
-        // Lowering the pio-SPI clock by 8x seems to fix it or at least makes it
-        // rare enough so that it does not happen during the BLE commissioning.
-        cyw43_pio::DEFAULT_CLOCK_DIVIDER * 8,
-        pio.irq0,
-        cs,
-        p.PIN_24,
-        p.PIN_29,
-        p.DMA_CH0,
-    );
+    spawner.spawn(ethernet_task(runner)).unwrap();
 
-    let state = mk_static!(cyw43::State, cyw43::State::new());
-    let (net_device, bt_device, mut control, runner) =
-        cyw43::new_with_bluetooth(state, pwr, spi, fw, btfw).await;
-    spawner.spawn(cyw43_task(runner)).unwrap();
-    control.init(clm).await; // We should have the Wifi MAC address now
-
-    // cyw43 is a bit special in that it needs to have allowlisted all multicast MAC addresses
-    // it should listen on. Therefore, add the mDNS ipv4 and ipv6 multicast MACs to the list,
-    // as well as the ipv6 neightbour solicitation requests' MAC.
-    let HardwareAddress::Ethernet(mac) = net_device.hardware_address() else {
-        unreachable!()
-    };
-    control
-        .add_multicast_address(MDNS_MULTICAST_MAC_IPV4)
-        .await
-        .unwrap();
-    control
-        .add_multicast_address(MDNS_MULTICAST_MAC_IPV6)
-        .await
-        .unwrap();
-    control
-        .add_multicast_address(multicast_mac_for_link_local_ipv6(&create_link_local_ipv6(
-            &mac,
-        )))
-        .await
-        .unwrap();
-
-    let controller: ExternalController<_, 20> = ExternalController::new(bt_device);
+    let (net_stack, mut net_runner) = create_net_stack(device, RoscRng.next_u64(), unsafe {
+        mk_static!(MatterStackResources).assume_init_mut()
+    });
+    let mut net_runner = pin!(async {
+        net_runner.run().await;
+        #[allow(unreachable_code)]
+        Ok(())
+    });
 
     // == Step 2: ==
     // Statically allocate the Matter stack.
     // For MCUs, it is best to allocate it statically, so as to avoid program stack blowups (its memory footprint is ~ 35 to 50KB).
     // It is also (currently) a mandatory requirement when the wireless stack variation is used.
-    let stack = mk_static!(EmbassyWifiMatterStack<()>).init_with(EmbassyWifiMatterStack::init(
+    let stack = mk_static!(EmbassyEthMatterStack<()>).init_with(EmbassyEthMatterStack::init(
         &BasicInfoConfig {
             vid: TEST_VID,
             pid: TEST_PID,
@@ -226,13 +190,13 @@ async fn main(spawner: Spawner) {
     //
     // This step can be repeated in that the stack can be stopped and started multiple times, as needed.
     let mut matter = pin!(stack.run(
-        // The Matter stack needs Wifi
-        EmbassyWifi::new(
-            PreexistingWifiDriver::new(net_device, Cyw43WifiController::new(control)),
-            stack
+        // The Matter stack needs access to the netif so as to detect network going up/down
+        EmbassyNetif::new(net_stack),
+        // The Matter stack needs to open two UDP sockets
+        Udp::new(
+            net_stack,
+            &*mk_static!(MatterUdpBuffers, MatterUdpBuffers::new()),
         ),
-        // The Matter stack needs BLE
-        EmbassyBle::new(PreexistingBleController::new(controller), stack),
         // The Matter stack needs a persister to store its state
         // `EmbassyPersist`+`EmbassyKvBlobStore` saves to a user-supplied NOR Flash region
         // However, for this demo and for simplicity, we use a dummy persister that does nothing
@@ -265,12 +229,22 @@ async fn main(spawner: Spawner) {
     });
 
     // Schedule the Matter run & the device loop together
-    select(&mut matter, &mut device).coalesce().await.unwrap();
+    select3(&mut matter, &mut device, &mut net_runner)
+        .coalesce()
+        .await
+        .unwrap();
 }
 
+#[allow(clippy::type_complexity)]
 #[embassy_executor::task]
-async fn cyw43_task(
-    runner: cyw43::Runner<'static, Output<'static>, PioSpi<'static, PIO0, 0, DMA_CH0>>,
+async fn ethernet_task(
+    runner: Runner<
+        'static,
+        W5500,
+        ExclusiveDevice<Spi<'static, SPI0, Async>, Output<'static>, Delay>,
+        Input<'static>,
+        Output<'static>,
+    >,
 ) -> ! {
     runner.run().await
 }
@@ -288,7 +262,7 @@ const LIGHT_ENDPOINT_ID: u16 = 1;
 const NODE: Node = Node {
     id: 0,
     endpoints: &[
-        EmbassyWifiMatterStack::<()>::root_metadata(),
+        EmbassyEthMatterStack::<()>::root_metadata(),
         Endpoint {
             id: LIGHT_ENDPOINT_ID,
             device_types: &[DEV_TYPE_ON_OFF_LIGHT],

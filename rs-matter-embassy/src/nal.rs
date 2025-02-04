@@ -35,17 +35,6 @@ const MAX_SOCKETS: usize = 2;
 /// The max number of meta data buffers that the Matter stack would use
 const MAX_META_DATA: usize = 4;
 
-/// Create an `embassy-net` stack suitable for the `rs-matter` stack
-pub fn create_net_stack<const N: usize, D: Driver>(
-    driver: D,
-    seed: u64,
-    resources: &mut StackResources<N>,
-) -> (Stack<'_>, Runner<'_, D>) {
-    let config = create_net_config(&driver);
-
-    net::new(driver, config, resources, seed)
-}
-
 /// The MAC address used for mDNS multicast queries over IPv4
 ///
 /// Useful with wifi stack implementations (i.e. cyw43) that require explicit
@@ -57,6 +46,17 @@ pub const MDNS_MULTICAST_MAC_IPV4: [u8; 6] = [0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb
 /// Useful with wifi stack implementations (i.e. cyw43) that require explicit
 /// allowlisting of the multicast MAC addresses they should be listening on.
 pub const MDNS_MULTICAST_MAC_IPV6: [u8; 6] = [0x33, 0x33, 0x00, 0x00, 0x00, 0xfb];
+
+/// Create an `embassy-net` stack suitable for the `rs-matter` stack
+pub fn create_net_stack<const N: usize, D: Driver>(
+    driver: D,
+    seed: u64,
+    resources: &mut StackResources<N>,
+) -> (Stack<'_>, Runner<'_, D>) {
+    let config = create_net_config(&driver);
+
+    net::new(driver, config, resources, seed)
+}
 
 /// Create a `Config` instance suitable for the `rs-matter` stack:
 /// - Ipv6 enabled with a static configuration that uses the link-local address derived from the MAC address

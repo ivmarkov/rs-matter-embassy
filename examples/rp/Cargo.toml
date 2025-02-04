@@ -8,6 +8,10 @@ resolver = "2"
 name = "light"
 harness = false
 
+[[bin]]
+name = "light_eth"
+harness = false
+
 #[patch.'https://github.com/ivmarkov/rs-matter-stack']
 #rs-matter-stack = { path = "../../../rs-matter-stack" }
 
@@ -23,13 +27,19 @@ embassy-rp = { version = "0.3", features = ["log", "unstable-pac", "time-driver"
 embassy-futures = "0.1.1"
 embassy-sync = { version = "0.6", features = ["log"] }
 embassy-usb-logger = "0.4"
+log = "0.4"
+embedded-alloc = "0.6"
+rs-matter-embassy = { path = "../../rs-matter-embassy", features = ["rp"] }
 
+# Wireless examples
 bt-hci = { version = "0.2", default-features = false, features = ["log"] }
 cyw43 = { version = "0.3", features = ["firmware-logs", "log", "bluetooth"] }
 cyw43-pio = "0.3"
-rs-matter-embassy = { path = "../../rs-matter-embassy", features = ["rp"] }
-embedded-alloc = "0.6"
-log = "0.4"
+
+# W5500 Ethernet examples
+embassy-net-wiznet = "0.2"
+embedded-hal-bus = { version = "0.1", features = ["async"] }
+rand_core = "0.6.4"
 
 cortex-m = { version = "0.7.6" }
 cortex-m-rt = "0.7.0"
