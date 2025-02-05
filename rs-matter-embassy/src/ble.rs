@@ -308,9 +308,9 @@ where
                     break;
                 }
                 ConnectionEvent::Gatt { data } => {
-                    let icoming = data.incoming();
+                    let incoming = data.incoming();
 
-                    match icoming {
+                    match incoming {
                         AttClient::Request(AttReq::Write {
                             handle,
                             data: bytes,
