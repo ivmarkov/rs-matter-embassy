@@ -13,7 +13,9 @@ use rs_matter_stack::network::{Embedding, Network};
 use rs_matter_stack::persist::KvBlobBuf;
 use rs_matter_stack::wireless::traits::{Ble, BleTask, WirelessConfig, WirelessData};
 use rs_matter_stack::{MatterStack, WirelessBle};
+
 use trouble_host::Controller;
+
 
 use crate::ble::{ControllerRef, TroubleBtpGattContext, TroubleBtpGattPeripheral};
 use crate::nal::{MatterStackResources, MatterUdpBuffers};
@@ -293,6 +295,80 @@ pub mod esp {
             ExternalController::new(BleConnector::new(self.controller, &mut self.peripheral))
         }
     }
+}
+
+#[cfg(feature = "nrf")]
+pub mod nrf {
+
+use core::future::Future;
+
+use nrf_sdc::SoftdeviceController;
+
+use bt_hci::ControllerToHostPacket;
+use bt_hci::HostToControllerPacket;
+use bt_hci::transport::WithIndicator;
+use bt_hci::WriteHci;
+
+use embedded_io::{Error, ErrorType};
+
+// struct MyType(FooType);
+// 
+// impl BarTrait for MyType {
+//     fn bar(&self) {
+//         // use `self.0` here
+//     }
+// }
+
+pub struct SoftdeviceExternalController<'d>(pub SoftdeviceController<'d>);
+
+// impl<'d> SoftdeviceExternalController<'d> {
+//     pub fn new() -> Self {
+//         //..
+//     }
+// }
+
+impl<'d> bt_hci::transport::Transport for SoftdeviceExternalController<'d> {
+    fn read<'a>(&self, buf: &'a mut [u8]) -> impl Future<Output = Result<ControllerToHostPacket<'a>, Self::Error>> {
+        async {
+            let kind = self.0.hci_get(buf).await.unwrap();// ?;
+            bt_hci::ControllerToHostPacket::from_hci_bytes_with_kind(kind, buf)
+                .map(|(x, _)| x)
+                .map_err(|err| match err {
+                    bt_hci::FromHciBytesError::InvalidSize => SoftdeviceExternalControllerError::Unknown,
+                    bt_hci::FromHciBytesError::InvalidValue => SoftdeviceExternalControllerError::Unknown,
+                })
+        }
+    }
+
+    /// Write a complete HCI packet from the tx buffer
+    fn write<T: HostToControllerPacket>(&self, val: &T) -> impl Future<Output = Result<(), Self::Error>> {
+        async {
+            let buf: [u8; 259] = [0; 259];
+            let w = WithIndicator::new(val);
+            let len = w.size();
+
+            self.0.hci_data_put(&buf[..len])
+                .map_err(|err| match err {
+                    _Error => SoftdeviceExternalControllerError::Unknown
+                })
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum SoftdeviceExternalControllerError {
+    Unknown,
+}
+
+impl Error for SoftdeviceExternalControllerError {
+    fn kind(&self) -> embedded_io::ErrorKind {
+        embedded_io::ErrorKind::Other
+    }
+}
+
+impl ErrorType for SoftdeviceExternalController<'_> {
+    type Error = SoftdeviceExternalControllerError;
+}
 }
 
 // Wifi: Type aliases and state structs for an Embassy Matter stack running over a Wifi network and BLE.
@@ -832,6 +908,384 @@ pub mod wifi {
 
         fn to_err(e: WifiError) -> Error {
             error!("Wifi error: {:?}", e);
+            Error::new(ErrorCode::NoNetworkInterface)
+        }
+    }
+}
+
+pub mod thread {
+
+    // OpenThread:
+    //  ThreadController
+    //  ThreadError
+
+    use rs_matter_stack::wireless::traits::{
+        Controller,
+        // Wifi, WifiData,
+        Thread, ThreadData,
+        Wireless,
+        WirelessTask,
+        // NC,
+    };
+
+    // use rs_matter_stack::wireless::traits::ThreadId;
+    use rs_matter_stack::network::{Embedding, Network};
+    // use rs_matter_stack::matter::utils::rand::Rand;
+    use rs_matter_stack::matter::error::Error;
+
+    use super::EmbassyNetContext;
+    use super::EmbassyWirelessMatterStack;
+
+    pub type EmbassyThreadMatterStack<'a, E> = EmbassyWirelessMatterStack<'a, Thread, E>;
+
+    pub trait ThreadDriverProvider {
+        type Driver<'a>: embassy_net::driver::Driver
+        where
+            Self: 'a;
+        type Controller<'a>: Controller<Data = ThreadData>
+        where
+            Self: 'a;
+
+        /// Provide a Wifi driver and controller by creating these when the Matter stack needs them
+        async fn provide(&mut self) -> (Self::Driver<'_>, Self::Controller<'_>);
+    }
+
+
+    impl<T> ThreadDriverProvider for &mut T
+    where
+        T: ThreadDriverProvider,
+    {
+        type Driver<'a>
+            = T::Driver<'a>
+        where
+            Self: 'a;
+        type Controller<'a>
+            = T::Controller<'a>
+        where
+            Self: 'a;
+
+        async fn provide(&mut self) -> (Self::Driver<'_>, Self::Controller<'_>) {
+            (*self).provide().await
+        }
+    }
+
+    // pub struct EmbassyThread {
+    pub struct EmbassyThread<'a, T> {
+        provider: T,
+        context: &'a EmbassyNetContext,
+        // rand: Rand,
+    }
+
+    // impl EmbassyThread
+    impl<'a, T> EmbassyThread<'a, T>
+    where
+        T: ThreadDriverProvider,
+    {
+        /// Create a new instance of the `EmbassyThread` type.
+        pub fn new<E>(provider: T, stack: &'a EmbassyThreadMatterStack<'a, E>) -> Self
+        where
+            E: Embedding + 'static,
+        {
+            Self::wrap(
+                provider,
+                stack.network().embedding().embedding().enet_context(),
+                // stack.matter().rand(),
+            )
+        }
+
+        /// Wrap the `EmbassyWifi` type around a Wifi driver provider and a network context.
+        pub const fn wrap(provider: T, context: &'a EmbassyNetContext/*, rand: Rand */) -> Self {
+            Self {
+                provider,
+                context,
+                // rand,
+            }
+        }
+    }
+
+    impl<T> Wireless for EmbassyThread<'_, T>
+    where
+        T: ThreadDriverProvider,
+    {
+        type Data = ThreadData;
+
+        async fn run<A>(&mut self, mut _task: A) -> Result<(), Error>
+        where
+            A: WirelessTask<Data = Self::Data>,
+        {
+            todo!("");
+            // Ok(())
+        }
+    }
+
+//     impl Wireless for EmbassyThread
+//     // impl<T> Wireless for EmbassyThread<'_, T>
+//     // where
+//     //     T: WifiDriverProvider,
+//     {
+//         // type Data = WifiData;
+
+//         // async fn run<A>(&mut self, mut task: A) -> Result<(), Error>
+//         // where
+//         //     A: WirelessTask<Data = Self::Data>,
+//         // {
+//         //     let (driver, controller) = self.provider.provide().await;
+
+//         //     let mut resources = self.context.resources.lock().await;
+//         //     let resources = &mut *resources;
+//         //     let buffers = &self.context.buffers;
+
+//         //     let mut seed = [0; core::mem::size_of::<u64>()];
+//         //     (self.rand)(&mut seed);
+
+//         //     let (stack, mut runner) = create_net_stack(driver, u64::from_le_bytes(seed), resources);
+
+//         //     let netif = EmbassyNetif::new(stack);
+//         //     let udp = Udp::new(stack, buffers);
+
+//         //     let mut main = pin!(task.run(netif, udp, controller));
+//         //     let mut run = pin!(async {
+//         //         runner.run().await;
+//         //         #[allow(unreachable_code)]
+//         //         Ok(())
+//         //     });
+
+//         //     select(&mut main, &mut run).coalesce().await
+//         // }
+//     }
+
+    #[cfg(feature = "nrf")]
+    pub mod nrf {
+
+        // use rs_matter_stack::wireless::traits::ThreadCredentials;
+        use rs_matter_stack::wireless::traits::ThreadId;
+
+        // use crate::matter::data_model::sdm::nw_commissioning::ThreadInterfaceScanResult;// {WiFiSecurity, WifiBand};
+        use crate::matter::error::{Error, ErrorCode};
+        // use crate::matter::tlv::OctetsOwned;
+        // use crate::matter::utils::storage::Vec;
+        use crate::stack::wireless::traits::{
+            Controller, NetworkCredentials, 
+            ThreadData,
+            // ThreadCredentials,
+            // ThreadScanResult,
+            // WifiData, WifiScanResult, WifiSsid,
+            WirelessData,
+        };
+    
+
+        pub struct NrfThreadDriverProvider {
+        // pub struct NrfThreadDriverProvider<'a, 'd> {
+            // controller: &'a nrf_thread::NrfThreadController<'d>,
+            // peripheral: PeripheralRef<'d, esp_hal::peripherals::WIFI>,
+        }
+
+        // impl<'a, 'd> NrfThreadDriverProvider<'a, 'd> {
+        impl NrfThreadDriverProvider {
+                /// Create a new instance of the `NrfThreadDriverProvider` type.
+            ///
+            /// # Arguments
+            /// - `controller` - The `esp-wifi` Wifi controller instance.
+            /// - `peripheral` - The Wifi peripheral instance.
+            pub fn new(
+                // controller: &'a nrf_thread::NrfThreadController<'d>,
+                // peripheral: impl Peripheral<P = esp_hal::peripherals::WIFI> + 'd,
+            ) -> Self {
+                Self {
+                    // controller,
+                    // peripheral: peripheral.into_ref(),
+                }
+            }
+        }
+
+        impl super::ThreadDriverProvider for NrfThreadDriverProvider {
+        // impl super::ThreadDriverProvider for NrfThreadDriverProvider<'_, '_> {
+                // type Driver<'t>
+            //     = WifiDevice<'t, WifiStaDevice>
+            // where
+            //     Self: 't;
+            // type Controller<'t>
+            //     = EspWifiController<'t>
+            // where
+            //     Self: 't;
+
+            async fn provide(&mut self) -> (Self::Driver<'_>, Self::Controller<'_>) {
+                // let (wifi_interface, mut controller) = esp_wifi::wifi::new_with_mode(
+                //     self.controller,
+                //     &mut self.peripheral,
+                //     WifiStaDevice,
+                // )
+                // .unwrap();
+
+                // // esp32c6-specific - need to boost the power to get a good signal
+                // controller
+                //     .set_power_saving(esp_wifi::config::PowerSaveMode::None)
+                //     .unwrap();
+
+                // (wifi_interface, EspWifiController::new(controller))
+            }
+        }
+        
+        /// An adaptor from the OpenThread API to the `rs-matter` Thread controller API
+        pub struct NrfThreadController<'a>(ThreadController<'a>, Option<ThreadId>);
+        // pub struct EspWifiController<'a>(WifiController<'a>, Option<WifiSsid>);
+
+        impl<'a> NrfThreadController<'a> {
+            /// Create a new instance of the `Esp32Controller` type.
+            ///
+            /// # Arguments
+            /// - `controller` - The `esp-wifi` Wifi controller instance.
+            pub const fn new(controller: ThreadController<'a>) -> Self {
+                Self(controller, None)
+            }
+        }
+
+        impl Controller for NrfThreadController<'_> {
+            type Data = ThreadData;
+
+            async fn scan<F>(
+                &mut self,
+                _network_id: Option<
+                    &<<Self::Data as WirelessData>::NetworkCredentials as NetworkCredentials>::NetworkId,
+                >,
+                mut _callback: F,
+            ) -> Result<(), Error>
+            where
+                F: FnMut(Option<&<Self::Data as WirelessData>::ScanResult>) -> Result<(), Error>,
+            {
+                // info!("Thread scan request");
+
+                // if !self.0.is_started().map_err(to_err)? {
+                //     self.0.start_async().await.map_err(to_err)?;
+                //     info!("Wifi started");
+                // }
+
+                // let mut scan_config = ScanConfig::default();
+                // if let Some(network_id) = network_id {
+                //     scan_config.ssid = Some(
+                //         core::str::from_utf8(network_id.0.vec.as_slice())
+                //             .unwrap_or("???")
+                //             .try_into()
+                //             .unwrap(),
+                //     );
+                // }
+
+                // let (aps, len) = self
+                //     .0
+                //     .scan_with_config_async::<MAX_NETWORKS>(scan_config)
+                //     .await
+                //     .map_err(to_err)?;
+
+                // info!(
+                //     "Wifi scan complete, reporting {} results out of {len} total",
+                //     aps.len()
+                // );
+
+                // for ap in aps {
+                //     let result = WifiScanResult {
+                //         ssid: WifiSsid(OctetsOwned {
+                //             vec: ap.ssid.as_bytes().try_into().unwrap(),
+                //         }),
+                //         bssid: OctetsOwned {
+                //             vec: Vec::from_slice(&ap.bssid).unwrap(),
+                //         },
+                //         channel: ap.channel as _,
+                //         rssi: Some(ap.signal_strength),
+                //         band: Some(WifiBand::B2G4), // TODO: Once c5 is out we can no longer hard-code this
+                //         security: match ap.auth_method {
+                //             Some(AuthMethod::None) => WiFiSecurity::UNENCRYPTED,
+                //             Some(AuthMethod::WEP) => WiFiSecurity::WEP,
+                //             Some(AuthMethod::WPA) => WiFiSecurity::WPA_PERSONAL,
+                //             Some(AuthMethod::WPA2Personal) => WiFiSecurity::WPA2_PERSONAL,
+                //             Some(AuthMethod::WPAWPA2Personal) => {
+                //                 WiFiSecurity::WPA_PERSONAL | WiFiSecurity::WPA2_PERSONAL
+                //             }
+                //             Some(AuthMethod::WPA2WPA3Personal) => {
+                //                 WiFiSecurity::WPA2_PERSONAL | WiFiSecurity::WPA3_PERSONAL
+                //             }
+                //             Some(AuthMethod::WPA2Enterprise) => WiFiSecurity::WPA2_PERSONAL,
+                //             _ => WiFiSecurity::WPA2_PERSONAL, // Best guess
+                //         },
+                //     };
+
+                //     callback(Some(&result))?;
+
+                //     info!("Scan result {:?}", result);
+                // }
+
+                // callback(None)?;
+
+                // info!("Wifi scan complete");
+
+                Ok(())
+            }
+
+            async fn connect(
+                &mut self,
+                _creds: &<Self::Data as WirelessData>::NetworkCredentials,
+            ) -> Result<(), Error> {
+                // let ssid = core::str::from_utf8(creds.ssid.0.vec.as_slice()).unwrap_or("???");
+
+                // if self.1.as_ref() == Some(&creds.ssid) && self.0.is_connected().map_err(to_err)? {
+                //     info!("Wifi connect request for an already connected SSID {ssid}");
+                //     return Ok(());
+                // }
+
+                // info!("Wifi connect request for SSID {ssid}");
+
+                // self.1 = None;
+
+                // if self.0.is_started().map_err(to_err)? {
+                //     self.0.stop_async().await.map_err(to_err)?;
+                //     info!("Wifi stopped");
+                // }
+
+                // self.0
+                //     .set_configuration(&Configuration::Client(ClientConfiguration {
+                //         ssid: ssid.try_into().unwrap(),
+                //         password: creds.password.clone(),
+                //         ..Default::default() // TODO: Try something else besides WPA2-Personal
+                //     }))
+                //     .map_err(to_err)?;
+                // info!("Wifi configuration updated");
+
+                // self.0.start_async().await.map_err(to_err)?;
+                // info!("Wifi started");
+
+                // self.0.connect_async().await.map_err(to_err)?;
+
+                // info!("Wifi connected");
+
+                // self.1 = self
+                //     .0
+                //     .is_connected()
+                //     .map_err(to_err)?
+                //     .then_some(creds.ssid.clone());
+
+                // info!("Wifi connect complete");
+
+                Ok(())
+            }
+
+            async fn connected_network(
+                &mut self,
+            ) -> Result<
+                Option<
+                    <<Self::Data as WirelessData>::NetworkCredentials as NetworkCredentials>::NetworkId,
+                >,
+                Error,
+            >{
+                Ok(self.1.clone())
+            }
+
+            async fn stats(&mut self) -> Result<<Self::Data as WirelessData>::Stats, Error> {
+                // Ok(None)
+                Ok(())
+            }
+        }
+
+        fn to_err(e: ThreadError) -> Error {
+            // error!("Thread error: {:?}", e);
             Error::new(ErrorCode::NoNetworkInterface)
         }
     }

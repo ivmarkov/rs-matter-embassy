@@ -23,6 +23,8 @@ harness = false
 [patch.crates-io]
 #rs-matter = { git = "https://github.com/project-chip/rs-matter" }
 rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "pase-breaks-provisioning" }
+nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "551a95436e999b4290b4a33383aa3d6747b63dd9" }
+nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "551a95436e999b4290b4a33383aa3d6747b63dd9" }
 
 [profile.release]
 opt-level = "s"
@@ -35,6 +37,7 @@ opt-level = "z"
 default = ["rs-matter-stack"]
 esp = ["esp-wifi", "esp-hal"]
 rp = ["cyw43", "cyw43-pio", "embassy-rp", "rand_core"]
+nrf = ["embassy-nrf", "rand", "nrf-sdc", "nrf-mpsl"]
 
 [dependencies]
 log = { version = "0.4", default-features = false }
@@ -63,3 +66,10 @@ cyw43 = { version = "0.3", optional = true, features = ["firmware-logs", "blueto
 cyw43-pio = { version = "0.3.0", optional = true }
 embassy-rp = { version = "0.3.0", optional = true, features = ["unstable-pac", "rp2040"] }
 rand_core = { version = "0.6.4", optional = true }
+
+# Only necessary when `rs-matter-embassy` is providing extra-sugar for Nordic silicon
+# embassy-nrf = { version = "0.3.1", features = ["nrf52840",  "time-driver-rtc1", "time"], default-features = false }
+embassy-nrf = { version = "0.3.1", optional = true, features = ["log", "time-driver-rtc1", "time", "nrf52840"], default-features = false }
+rand = { version = "0.8.4", optional = true, default-features = false }
+nrf-sdc = {  git = "https://github.com/alexmoon/nrf-sdc.git", rev = "551a95436e999b4290b4a33383aa3d6747b63dd9", version = "0.1.0", optional = true, default-features = false, features = ["nrf52840", "peripheral", "central"] }
+nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "551a95436e999b4290b4a33383aa3d6747b63dd9", version = "0.1.0", optional = true, default-features = false, features = ["critical-section-impl"] }
