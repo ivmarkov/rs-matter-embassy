@@ -45,8 +45,6 @@ nrf-sdc = {  git = "https://github.com/alexmoon/nrf-sdc.git", rev = "551a95436e9
 nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "551a95436e999b4290b4a33383aa3d6747b63dd9", version = "0.1.0", default-features = false, features = ["critical-section-impl"] }
 bt-hci = { version = "0.2", default-features = false}
 
-
-# embedded-alloc = "0.6.0"
 # defmt = "0.3"
 # defmt-rtt = "0.4"
 
