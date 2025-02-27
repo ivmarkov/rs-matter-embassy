@@ -24,7 +24,6 @@ use embassy_time::{Duration, Timer};
 // use embassy_futures::block_on;
 // use embassy_executor::Executor;
 
-
 use log::info;
 // use defmt::{error, info, unwrap};
 
@@ -42,10 +41,10 @@ use rs_matter_embassy::stack::test_device::{
 };
 use rs_matter_embassy::stack::MdnsType;
 // use rs_matter_embassy::wireless::nrf::NrfBleControllerProvider;
-use rs_matter_embassy::wireless::{EmbassyBle, PreexistingBleController};
 use rs_matter_embassy::wireless::nrf::SoftdeviceExternalController;
 use rs_matter_embassy::wireless::thread::nrf::NrfThreadDriverProvider;
 use rs_matter_embassy::wireless::thread::{EmbassyThread, EmbassyThreadMatterStack};
+use rs_matter_embassy::wireless::{EmbassyBle, PreexistingBleController};
 // use rs_matter_embassy::wireless::EmbassyBle;
 
 use rs_matter_embassy::rand::nrf::{nrf_init_rand, nrf_rand};
@@ -57,7 +56,6 @@ use bt_hci::controller::ExternalController;
 
 // use bt_hci::{ControllerToHostPacket, FromHciBytes, HostToControllerPacket, PacketKind, WriteHci};
 
-
 // use embassy_nrf::rng::Rng;
 // use embassy_nrf::peripherals;
 // use embassy_nrf::{bind_interrupts, peripherals, rng};
@@ -67,7 +65,7 @@ use embassy_nrf::{bind_interrupts, rng};
 
 // extern crate alloc;
 // use nrf_matter::persist;
-// use log::{error, info};  
+// use log::{error, info};
 // use static_cell::StaticCell;
 // use embedded_alloc::LlffHeap as Heap;
 
@@ -152,11 +150,8 @@ fn build_sdc<'d, const N: usize>(
 /// We need a bigger log ring-buffer or else the device QR code printout is half-lost
 const LOG_RINGBUF_SIZE: usize = 4096;
 
-
-
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-
     rtt_init_log!(
         log::LevelFilter::Info,
         rtt_target::ChannelMode::NoBlockSkip,
@@ -185,7 +180,8 @@ async fn main(spawner: Spawner) {
     // let peripherals = embassy_nrf::init(Default::default());
 
     let p = embassy_nrf::init(Default::default());
-    let mpsl_p = mpsl::Peripherals::new(p.RTC0, p.TIMER0, p.TEMP, p.PPI_CH19, p.PPI_CH30, p.PPI_CH31);
+    let mpsl_p =
+        mpsl::Peripherals::new(p.RTC0, p.TIMER0, p.TEMP, p.PPI_CH19, p.PPI_CH30, p.PPI_CH31);
     let lfclk_cfg = mpsl::raw::mpsl_clock_lfclk_cfg_t {
         source: mpsl::raw::MPSL_CLOCK_LF_SRC_RC as u8,
         rc_ctiv: mpsl::raw::MPSL_RECOMMENDED_RC_CTIV as u8,
@@ -194,13 +190,12 @@ async fn main(spawner: Spawner) {
         skip_wait_lfclk_started: mpsl::raw::MPSL_DEFAULT_SKIP_WAIT_LFCLK_STARTED != 0,
     };
     static MPSL: StaticCell<MultiprotocolServiceLayer> = StaticCell::new();
-    let mpsl = MPSL.init(
-        mpsl::MultiprotocolServiceLayer::new(mpsl_p, Irqs, lfclk_cfg).unwrap());
+    let mpsl = MPSL.init(mpsl::MultiprotocolServiceLayer::new(mpsl_p, Irqs, lfclk_cfg).unwrap());
     spawner.must_spawn(mpsl_task(&*mpsl));
 
     let sdc_p = sdc::Peripherals::new(
-        p.PPI_CH17, p.PPI_CH18, p.PPI_CH20, p.PPI_CH21, p.PPI_CH22, p.PPI_CH23, p.PPI_CH24, p.PPI_CH25, p.PPI_CH26,
-        p.PPI_CH27, p.PPI_CH28, p.PPI_CH29,
+        p.PPI_CH17, p.PPI_CH18, p.PPI_CH20, p.PPI_CH21, p.PPI_CH22, p.PPI_CH23, p.PPI_CH24,
+        p.PPI_CH25, p.PPI_CH26, p.PPI_CH27, p.PPI_CH28, p.PPI_CH29,
     );
 
     let mut rng = rng::Rng::new(p.RNG, Irqs);
@@ -208,9 +203,8 @@ async fn main(spawner: Spawner) {
     let mut sdc_mem = sdc::Mem::<3312>::new();
     let sdc = build_sdc(sdc_p, &mut rng, mpsl, &mut sdc_mem).unwrap();
 
-    
-    let controller: ExternalController<_, 20> = ExternalController::new(SoftdeviceExternalController(sdc));
-
+    let controller: ExternalController<_, 20> =
+        ExternalController::new(SoftdeviceExternalController(sdc));
 
     // To erase generics, `Matter` takes a rand `fn` rather than a trait or a closure,
     // so we need to initialize the global `rand` fn once
@@ -226,24 +220,24 @@ async fn main(spawner: Spawner) {
     // For MCUs, it is best to allocate it statically, so as to avoid program stack blowups (its memory footprint is ~ 35 to 50KB).
     // It is also (currently) a mandatory requirement when the wireless stack variation is used.
     let stack = mk_static!(EmbassyThreadMatterStack<()>).init_with(EmbassyThreadMatterStack::init(
-    // let stack = &*Box::leak(Box::new_uninit()).init_with(EmbassyThreadMatterStack::<()>::init(
-                &BasicInfoConfig {
-                vid: TEST_VID,
-                pid: TEST_PID,
-                hw_ver: 2,
-                sw_ver: 1,
-                sw_ver_str: "1",
-                serial_no: "aabbccdd",
-                device_name: "MyLight",
-                product_name: "ACME Light",
-                vendor_name: "ACME",
-            },
-            TEST_BASIC_COMM_DATA,
-            &TEST_DEV_ATT,
-            MdnsType::Builtin,
-            epoch,
-            nrf_rand,
-        ));
+        // let stack = &*Box::leak(Box::new_uninit()).init_with(EmbassyThreadMatterStack::<()>::init(
+        &BasicInfoConfig {
+            vid: TEST_VID,
+            pid: TEST_PID,
+            hw_ver: 2,
+            sw_ver: 1,
+            sw_ver_str: "1",
+            serial_no: "aabbccdd",
+            device_name: "MyLight",
+            product_name: "ACME Light",
+            vendor_name: "ACME",
+        },
+        TEST_BASIC_COMM_DATA,
+        &TEST_DEV_ATT,
+        MdnsType::Builtin,
+        epoch,
+        nrf_rand,
+    ));
 
     // == Step 3: ==
     // Our "light" on-off cluster.
@@ -278,9 +272,12 @@ async fn main(spawner: Spawner) {
     // This step can be repeated in that the stack can be stopped and started multiple times, as needed.
     let mut matter = pin!(stack.run(
         // The Matter stack needs to instantiate an `embassy-net` `Driver` and `Controller`
-        EmbassyThread::new(NrfThreadDriverProvider::new(
+        EmbassyThread::new(
+            NrfThreadDriverProvider::new(
             // &init, p.THREAD
-        ), stack),
+        ),
+            stack
+        ),
         // The Matter stack needs BLE
         // EmbassyBle::new(NrfBleControllerProvider::new(&init, peripherals.BT), stack),
         EmbassyBle::new(PreexistingBleController::new(controller), stack),
@@ -337,7 +334,6 @@ const NODE: Node = Node {
         },
     ],
 };
-
 
 // #[allow(static_mut_refs)]
 // fn init_heap() {
