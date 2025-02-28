@@ -20,7 +20,7 @@ use embassy_executor::Spawner;
 use embassy_futures::select::select;
 use embassy_time::{Duration, Timer};
 
-// use embedded_alloc::LlffHeap;
+use embedded_alloc::LlffHeap;
 // use embassy_futures::block_on;
 // use embassy_executor::Executor;
 
@@ -67,15 +67,11 @@ use embassy_nrf::{bind_interrupts, rng};
 // use nrf_matter::persist;
 // use log::{error, info};
 // use static_cell::StaticCell;
-// use embedded_alloc::LlffHeap as Heap;
 
 // use {defmt_rtt as _, panic_probe as _};
 // use rand::Rng as _;
 
 use rtt_target::rtt_init_log;
-
-// #[global_allocator]
-// static HEAP: Heap = Heap::empty();
 
 // static EXECUTOR: StaticCell<Executor> = StaticCell::new();
 
@@ -116,6 +112,11 @@ bind_interrupts!(struct Irqs {
     RTC0 => nrf_sdc::mpsl::HighPrioInterruptHandler;
 });
 
+#[global_allocator]
+static HEAP: LlffHeap = LlffHeap::empty();
+// #[global_allocator]
+// static HEAP: Heap = Heap::empty();
+
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     //defmt::error!("panicked");
@@ -152,6 +153,17 @@ const LOG_RINGBUF_SIZE: usize = 4096;
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
+    // `rs-matter` uses the `x509` crate which (still) needs a few kilos of heap space
+    {
+        const HEAP_SIZE: usize = 8192;
+
+        static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
+        unsafe { HEAP.init(addr_of_mut!(HEAP_MEM) as usize, HEAP_SIZE) }
+    }
+
+    // == Step 1: ==
+    // Necessary `nrf-hal` and `mrf-thread` initialization boilerplate
+
     rtt_init_log!(
         log::LevelFilter::Info,
         rtt_target::ChannelMode::NoBlockSkip,
@@ -159,14 +171,6 @@ async fn main(spawner: Spawner) {
     );
 
     info!("Starting...");
-
-    // Heap strictly necessary only for Wifi and for the only Matter dependency which needs (~4KB) alloc - `x509`
-    // However since `esp32` specifically has a disjoint heap which causes bss size troubles, it is easier
-    // to allocate the statics once from heap as well
-    // init_heap();
-
-    // == Step 1: ==
-    // Necessary `nrf-hal` and `mrf-thread` initialization boilerplate
 
     // let peripherals = mrf_hal::init({
     //     let mut config = nrf_hal::Config::default();
@@ -334,22 +338,3 @@ const NODE: Node = Node {
         },
     ],
 };
-
-// #[allow(static_mut_refs)]
-// fn init_heap() {
-//     fn add_region<const N: usize>(region: &'static mut MaybeUninit<[u8; N]>) {
-//         unsafe {
-//             esp_alloc::HEAP.add_region(esp_alloc::HeapRegion::new(
-//                 region.as_mut_ptr() as *mut u8,
-//                 N,
-//                 esp_alloc::MemoryCapability::Internal.into(),
-//             ));
-//         }
-//     }
-
-//     {
-//         static mut HEAP: MaybeUninit<[u8; 186 * 1024]> = MaybeUninit::uninit();
-
-//         add_region(unsafe { &mut HEAP });
-//     }
-// }
