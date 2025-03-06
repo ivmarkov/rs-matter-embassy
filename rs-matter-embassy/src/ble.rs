@@ -288,7 +288,7 @@ where
         conn: &Connection<'_>,
         ind: &IfMutex<M, IndBuffer>,
         mut callback: F,
-    ) -> Result<(), Error>
+    ) -> Result<(), trouble_host::Error>
     where
         F: FnMut(GattPeripheralEvent) + Send,
     {
@@ -370,7 +370,7 @@ where
                         _ => (),
                     }
 
-                    if let Err(e) = data.process(server).await {
+                    if let Err(e) = data.process(&server.server).await {
                         warn!("GATT: Error processing event: {:?}", e);
                     }
                 }
@@ -398,7 +398,7 @@ where
         let adv_data = [
             AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
             AdStructure::ServiceData16 {
-                uuid: MATTER_BLE_SERVICE_UUID16,
+                uuid: MATTER_BLE_SERVICE_UUID16.to_le_bytes(),
                 data: &service_adv_enc_data,
             },
             AdStructure::CompleteLocalName(service_name.as_bytes()),

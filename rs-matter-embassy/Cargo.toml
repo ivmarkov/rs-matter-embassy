@@ -17,12 +17,13 @@ harness = false
 
 #[patch.'https://github.com/ivmarkov/rs-matter-stack']
 #rs-matter-stack = { path = "../../rs-matter-stack" }
-#[patch.'https://github.com/embassy-rs/trouble']
-#trouble-host = { version = "0.1", path = "../../trouble/host" }
+[patch.'https://github.com/embassy-rs/trouble']
+trouble-host = { version = "0.1", git = "https://github.com/ivmarkov/trouble", branch = "restore-gattdata-process" }
+#trouble-host = { version = "0.1", path = "../../../trouble/host" }
 
 [patch.crates-io]
 #rs-matter = { git = "https://github.com/project-chip/rs-matter" }
-rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "pase-breaks-provisioning" }
+rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "next" }
 
 [profile.release]
 opt-level = "s"
