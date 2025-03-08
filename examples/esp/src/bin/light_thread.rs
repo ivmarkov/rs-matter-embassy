@@ -1,10 +1,10 @@
-//! An example utilizing the `EmbassyWifiMatterStack` struct.
+//! An example utilizing the `EmbassyThreadMatterStack` struct.
 //!
-//! As the name suggests, this Matter stack assembly uses Wifi as the main transport,
+//! As the name suggests, this Matter stack assembly uses Thread as the main transport,
 //! and thus BLE for commissioning.
 //!
 //! If you want to use Ethernet, utilize `EmbassyEthMatterStack` instead.
-//! If you want to use non-concurrent commissioning, utilize `EmbassyWifiNCMatterStack` instead
+//! If you want to use non-concurrent commissioning, utilize `EmbassyThreadNCMatterStack` instead
 //! (Note: Alexa does not work (yet) with non-concurrent commissioning.)
 //!
 //! The example implements a fictitious Light device (an On-Off Matter cluster).
@@ -39,8 +39,8 @@ use rs_matter_embassy::stack::test_device::{
 };
 use rs_matter_embassy::stack::MdnsType;
 use rs_matter_embassy::wireless::esp::EspBleControllerProvider;
-use rs_matter_embassy::wireless::wifi::esp::EspWifiDriverProvider;
-use rs_matter_embassy::wireless::wifi::{EmbassyWifi, EmbassyWifiMatterStack};
+use rs_matter_embassy::wireless::thread::esp::EspThreadRadioProvider;
+use rs_matter_embassy::wireless::thread::{EmbassyThread, EmbassyThreadMatterStack};
 use rs_matter_embassy::wireless::EmbassyBle;
 
 extern crate alloc;
@@ -51,13 +51,13 @@ async fn main(_s: Spawner) {
 
     info!("Starting...");
 
-    // Heap strictly necessary only for Wifi and for the only Matter dependency which needs (~4KB) alloc - `x509`
+    // Heap strictly necessary only for BLE and for the only Matter dependency which needs (~4KB) alloc - `x509`
     // However since `esp32` specifically has a disjoint heap which causes bss size troubles, it is easier
     // to allocate the statics once from heap as well
     init_heap();
 
     // == Step 1: ==
-    // Necessary `esp-hal` and `esp-wifi` initialization boilerplate
+    // Necessary `esp-hal` initialization boilerplate
 
     let peripherals = esp_hal::init({
         let mut config = esp_hal::Config::default();
@@ -74,6 +74,10 @@ async fn main(_s: Spawner) {
 
     let init = esp_wifi::init(timg0.timer0, rng, peripherals.RADIO_CLK).unwrap();
 
+    // TODO: Rather than doing this here, move the `esp_wifi::init` call to the `EmbassyWifi` impl
+    // Also see https://github.com/esp-rs/esp-hal/issues/3239
+    let radio_clk_ieee802154 = unsafe { esp_hal::peripherals::RADIO_CLK::steal() };
+
     #[cfg(not(feature = "esp32"))]
     {
         esp_hal_embassy::init(
@@ -89,7 +93,7 @@ async fn main(_s: Spawner) {
     // Allocate the Matter stack.
     // For MCUs, it is best to allocate it statically, so as to avoid program stack blowups (its memory footprint is ~ 35 to 50KB).
     // It is also (currently) a mandatory requirement when the wireless stack variation is used.
-    let stack = &*Box::leak(Box::new_uninit()).init_with(EmbassyWifiMatterStack::<()>::init(
+    let stack = &*Box::leak(Box::new_uninit()).init_with(EmbassyThreadMatterStack::<()>::init(
         &BasicInfoConfig {
             vid: TEST_VID,
             pid: TEST_PID,
@@ -140,8 +144,11 @@ async fn main(_s: Spawner) {
     //
     // This step can be repeated in that the stack can be stopped and started multiple times, as needed.
     let mut matter = pin!(stack.run(
-        // The Matter stack needs to instantiate an `embassy-net` `Driver` and `Controller`
-        EmbassyWifi::new(EspWifiDriverProvider::new(&init, peripherals.WIFI), stack),
+        // The Matter stack needs to instantiate an `openthread` Radio
+        EmbassyThread::new(
+            EspThreadRadioProvider::new(peripherals.IEEE802154, radio_clk_ieee802154),
+            stack
+        ),
         // The Matter stack needs BLE
         EmbassyBle::new(EspBleControllerProvider::new(&init, peripherals.BT), stack),
         // The Matter stack needs a persister to store its state
@@ -187,7 +194,7 @@ const LIGHT_ENDPOINT_ID: u16 = 1;
 const NODE: Node = Node {
     id: 0,
     endpoints: &[
-        EmbassyWifiMatterStack::<()>::root_metadata(),
+        EmbassyThreadMatterStack::<()>::root_metadata(),
         Endpoint {
             id: LIGHT_ENDPOINT_ID,
             device_types: &[DEV_TYPE_ON_OFF_LIGHT],

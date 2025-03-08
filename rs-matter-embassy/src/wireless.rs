@@ -1,30 +1,28 @@
 //! Wireless: Type aliases and state structs for an Embassy Matter stack running over a wireless network (Wifi or Thread) and BLE.
 
-use core::mem::MaybeUninit;
-
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 
 use rs_matter::tlv::{FromTLV, ToTLV};
 use rs_matter_stack::matter::error::Error;
 use rs_matter_stack::matter::utils::init::{init, Init};
 use rs_matter_stack::matter::utils::rand::Rand;
-use rs_matter_stack::matter::utils::sync::IfMutex;
 use rs_matter_stack::network::{Embedding, Network};
 use rs_matter_stack::persist::KvBlobBuf;
 use rs_matter_stack::wireless::traits::{Ble, BleTask, WirelessConfig, WirelessData};
 use rs_matter_stack::{MatterStack, WirelessBle};
+
 use trouble_host::Controller;
 
 use crate::ble::{ControllerRef, TroubleBtpGattContext, TroubleBtpGattPeripheral};
-use crate::nal::{MatterStackResources, MatterUdpBuffers};
 
 /// A type alias for an Embassy Matter stack running over a wireless network (Wifi or Thread) and BLE.
-pub type EmbassyWirelessMatterStack<'a, T, E = ()> = MatterStack<'a, EmbassyWirelessBle<T, E>>;
+pub type EmbassyWirelessMatterStack<'a, T, N, E = ()> =
+    MatterStack<'a, EmbassyWirelessBle<T, N, E>>;
 
 /// A type alias for an Embassy implementation of the `Network` trait for a Matter stack running over
 /// BLE during commissioning, and then over either WiFi or Thread when operating.
-pub type EmbassyWirelessBle<T, E = ()> =
-    WirelessBle<CriticalSectionRawMutex, T, KvBlobBuf<EmbassyGatt<E>>>;
+pub type EmbassyWirelessBle<T, N, E = ()> =
+    WirelessBle<CriticalSectionRawMutex, T, KvBlobBuf<EmbassyGatt<N, E>>>;
 
 /// An embedding of the Trouble Gatt peripheral context for the `WirelessBle` network type from `rs-matter-stack`.
 ///
@@ -36,14 +34,15 @@ pub type EmbassyWirelessBle<T, E = ()> =
 /// ```
 ///
 /// ... where `E` can be a next-level, user-supplied embedding or just `()` if the user does not need to embed anything.
-pub struct EmbassyGatt<E = ()> {
+pub struct EmbassyGatt<N, E = ()> {
     btp_gatt_context: TroubleBtpGattContext<CriticalSectionRawMutex>,
-    enet_context: EmbassyNetContext,
+    net_context: N,
     embedding: E,
 }
 
-impl<E> EmbassyGatt<E>
+impl<N, E> EmbassyGatt<N, E>
 where
+    N: Embedding,
     E: Embedding,
 {
     /// Creates a new instance of the `EspGatt` embedding.
@@ -52,7 +51,7 @@ where
     const fn new() -> Self {
         Self {
             btp_gatt_context: TroubleBtpGattContext::new(),
-            enet_context: EmbassyNetContext::new(),
+            net_context: N::INIT,
             embedding: E::INIT,
         }
     }
@@ -61,7 +60,7 @@ where
     fn init() -> impl Init<Self> {
         init!(Self {
             btp_gatt_context <- TroubleBtpGattContext::init(),
-            enet_context <- EmbassyNetContext::init(),
+            net_context <- N::init(),
             embedding <- E::init(),
         })
     }
@@ -71,8 +70,8 @@ where
         &self.btp_gatt_context
     }
 
-    pub fn enet_context(&self) -> &EmbassyNetContext {
-        &self.enet_context
+    pub fn net_context(&self) -> &N {
+        &self.net_context
     }
 
     /// Return a reference to the embedding.
@@ -81,46 +80,15 @@ where
     }
 }
 
-impl<E> Embedding for EmbassyGatt<E>
+impl<N, E> Embedding for EmbassyGatt<N, E>
 where
+    N: Embedding,
     E: Embedding,
 {
     const INIT: Self = Self::new();
 
     fn init() -> impl Init<Self> {
         EmbassyGatt::init()
-    }
-}
-
-/// A context (storage) for the network layer of the Matter stack.
-pub struct EmbassyNetContext {
-    buffers: MatterUdpBuffers,
-    resources: IfMutex<CriticalSectionRawMutex, MatterStackResources>,
-}
-
-impl EmbassyNetContext {
-    /// Create a new instance of the `EmbassyNetContext` type.
-    pub const fn new() -> Self {
-        Self {
-            buffers: MatterUdpBuffers::new(),
-            resources: IfMutex::new(MatterStackResources::new()),
-        }
-    }
-
-    /// Return an in-place initializer for the `EmbassyNetContext` type.
-    pub fn init() -> impl Init<Self> {
-        init!(Self {
-            // TODO: Implement init constructor for `UdpBuffers`
-            buffers: MatterUdpBuffers::new(),
-            // Note: below will break if `HostResources` stops being a bunch of `MaybeUninit`s
-            resources <- IfMutex::init(unsafe { MaybeUninit::<MatterStackResources>::uninit().assume_init() }),
-        })
-    }
-}
-
-impl Default for EmbassyNetContext {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -295,29 +263,34 @@ pub mod esp {
     }
 }
 
-// Wifi: Type aliases and state structs for an Embassy Matter stack running over a Wifi network and BLE.
-pub mod wifi {
+// Thread: Type aliases and state structs for an Embassy Matter stack running over a Thread network and BLE.
+pub mod thread {
+    use core::mem::MaybeUninit;
     use core::pin::pin;
 
-    use edge_nal_embassy::Udp;
-
     use embassy_futures::select::select;
+    use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+
+    use openthread::{OpenThread, OtResources, OtRngCore, OtRngCoreError, Radio};
 
     use rs_matter_stack::matter::error::Error;
+    use rs_matter_stack::matter::utils::init::{init, Init};
     use rs_matter_stack::matter::utils::rand::Rand;
     use rs_matter_stack::matter::utils::select::Coalesce;
+    use rs_matter_stack::matter::utils::sync::IfMutex;
     use rs_matter_stack::network::{Embedding, Network};
     use rs_matter_stack::wireless::traits::{
-        Controller, Wifi, WifiData, Wireless, WirelessTask, NC,
+        Controller, NetworkCredentials, Thread, ThreadData, Wireless, WirelessData, WirelessTask,
+        NC,
     };
 
-    use crate::nal::create_net_stack;
-    use crate::netif::EmbassyNetif;
+    use crate::ot::{MatterSrpResources, MatterUdpResources, OtNetif};
 
-    use super::{EmbassyNetContext, EmbassyWirelessMatterStack};
+    use super::EmbassyWirelessMatterStack;
 
-    /// A type alias for an Embassy Matter stack running over Wifi (and BLE, during commissioning).
-    pub type EmbassyWifiMatterStack<'a, E> = EmbassyWirelessMatterStack<'a, Wifi, E>;
+    /// A type alias for an Embassy Matter stack running over Thread (and BLE, during commissioning).
+    pub type EmbassyThreadMatterStack<'a, E> =
+        EmbassyWirelessMatterStack<'a, Thread, OtNetContext, E>;
 
     /// A type alias for an Embassy Matter stack running over Wifi (and BLE, during commissioning).
     ///
@@ -327,7 +300,330 @@ pub mod wifi {
     /// This is useful to save memory by only having one of the stacks active at any point in time.
     ///
     /// Note that Alexa does not (yet) work with non-concurrent commissioning.
-    pub type EmbassyWifiNCMatterStack<'a, E> = EmbassyWirelessMatterStack<'a, Wifi<NC>, E>;
+    pub type EmbassyThreadNCMatterStack<'a, E> =
+        EmbassyWirelessMatterStack<'a, Thread<NC>, OtNetContext, E>;
+
+    /// A companion trait of `EmbassyThread` for providing a Thread radio and controller.
+    pub trait ThreadRadioProvider {
+        type Radio<'a>: Radio
+        where
+            Self: 'a;
+
+        /// Provide a Thread radio by creating it when the Matter stack needs it
+        async fn provide(&mut self) -> Self::Radio<'_>;
+    }
+
+    impl<T> ThreadRadioProvider for &mut T
+    where
+        T: ThreadRadioProvider,
+    {
+        type Radio<'a>
+            = T::Radio<'a>
+        where
+            Self: 'a;
+
+        async fn provide(&mut self) -> Self::Radio<'_> {
+            (*self).provide().await
+        }
+    }
+
+    /// A Wifi driver provider that uses a pre-existing, already created Thread radio and controller,
+    /// rather than creating them when the Matter stack needs them.
+    pub struct PreexistingThreadRadio<R>(R);
+
+    impl<R> PreexistingThreadRadio<R> {
+        /// Create a new instance of the `PreexistingWifiDriver` type.
+        pub const fn new(radio: R) -> Self {
+            Self(radio)
+        }
+    }
+
+    impl<R> ThreadRadioProvider for PreexistingThreadRadio<R>
+    where
+        R: Radio,
+    {
+        type Radio<'t>
+            = &'t mut R
+        where
+            Self: 't;
+
+        async fn provide(&mut self) -> Self::Radio<'_> {
+            &mut self.0
+        }
+    }
+
+    /// A `Wireless` trait implementation for `openthread`'s Thread stack.
+    pub struct EmbassyThread<'a, T> {
+        provider: T,
+        context: &'a OtNetContext,
+        rand: Rand,
+    }
+
+    impl<'a, T> EmbassyThread<'a, T>
+    where
+        T: ThreadRadioProvider,
+    {
+        /// Create a new instance of the `EmbassyThread` type.
+        pub fn new<E>(provider: T, stack: &'a EmbassyThreadMatterStack<'a, E>) -> Self
+        where
+            E: Embedding + 'static,
+        {
+            Self::wrap(
+                provider,
+                stack.network().embedding().embedding().net_context(),
+                stack.matter().rand(),
+            )
+        }
+
+        /// Wrap the `EmbassyThread` type around a Thread driver provider and a network context.
+        pub const fn wrap(provider: T, context: &'a OtNetContext, rand: Rand) -> Self {
+            Self {
+                provider,
+                context,
+                rand,
+            }
+        }
+    }
+
+    impl<T> Wireless for EmbassyThread<'_, T>
+    where
+        T: ThreadRadioProvider,
+    {
+        type Data = ThreadData;
+
+        async fn run<A>(&mut self, mut task: A) -> Result<(), Error>
+        where
+            A: WirelessTask<Data = Self::Data>,
+        {
+            let radio = self.provider.provide().await;
+
+            let mut resources = self.context.resources.lock().await;
+            let (ot_resources, ot_udp_resources, ot_srp_resources) = &mut *resources;
+
+            let mut rng = OtRngCoreImpl(self.rand);
+
+            let ot = OpenThread::new_with_udp_srp(
+                &mut rng,
+                ot_resources,
+                ot_udp_resources,
+                ot_srp_resources,
+            )
+            .unwrap();
+
+            let controller = OtController(ot);
+
+            let netif = OtNetif::new(ot);
+
+            let mut main = pin!(task.run(netif, ot, controller));
+            let mut run = pin!(async {
+                ot.run(radio).await;
+                #[allow(unreachable_code)]
+                Ok(())
+            });
+
+            select(&mut main, &mut run).coalesce().await
+        }
+    }
+
+    pub struct OtNetContext {
+        resources:
+            IfMutex<CriticalSectionRawMutex, (OtResources, MatterUdpResources, MatterSrpResources)>,
+    }
+
+    impl OtNetContext {
+        /// Create a new instance of the `OtNetContext` type.
+        pub const fn new() -> Self {
+            Self {
+                resources: IfMutex::new((
+                    OtResources::new(),
+                    MatterUdpResources::new(),
+                    MatterSrpResources::new(),
+                )),
+            }
+        }
+
+        /// Return an in-place initializer for the `OtNetContext` type.
+        pub fn init() -> impl Init<Self> {
+            init!(Self {
+                // Note: below will break if `Ot*Resources` stop being a bunch of `MaybeUninit`s
+                resources <- IfMutex::init((
+                    unsafe { MaybeUninit::<OtResources>::uninit().assume_init() },
+                    unsafe { MaybeUninit::<MatterUdpResources>::uninit().assume_init() },
+                    unsafe { MaybeUninit::<MatterSrpResources>::uninit().assume_init() },
+                )),
+            })
+        }
+    }
+
+    impl Default for OtNetContext {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl Embedding for OtNetContext {
+        const INIT: Self = Self::new();
+
+        fn init() -> impl Init<Self> {
+            OtNetContext::init()
+        }
+    }
+
+    struct OtController<'a>(OpenThread<'a>);
+
+    impl<'a> Controller for OtController<'a> {
+        type Data = ThreadData;
+
+        async fn scan<F>(
+            &mut self,
+            network_id: Option<
+                &<<Self::Data as WirelessData>::NetworkCredentials as NetworkCredentials>::NetworkId,
+            >,
+            callback: F,
+        ) -> Result<(), Error>
+        where
+            F: FnMut(Option<&<Self::Data as WirelessData>::ScanResult>) -> Result<(), Error>,
+        {
+            todo!()
+        }
+
+        async fn connect(
+            &mut self,
+            creds: &<Self::Data as WirelessData>::NetworkCredentials,
+        ) -> Result<(), Error> {
+            todo!()
+        }
+
+        async fn connected_network(
+            &mut self,
+        ) -> Result<
+            Option<
+                <<Self::Data as WirelessData>::NetworkCredentials as NetworkCredentials>::NetworkId,
+            >,
+            Error,
+        > {
+            todo!()
+        }
+
+        async fn stats(&mut self) -> Result<<Self::Data as WirelessData>::Stats, Error> {
+            Ok(())
+        }
+    }
+
+    /// Adapt `rs-matter`'s `Rand` to `RngCore` necessary for OpenThread
+    struct OtRngCoreImpl(Rand);
+
+    impl OtRngCore for OtRngCoreImpl {
+        fn next_u32(&mut self) -> u32 {
+            let mut bytes = [0; 4];
+            (self.0)(&mut bytes);
+
+            u32::from_ne_bytes(bytes)
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            let mut bytes = [0; 8];
+            (self.0)(&mut bytes);
+
+            u64::from_ne_bytes(bytes)
+        }
+
+        fn fill_bytes(&mut self, dest: &mut [u8]) {
+            (self.0)(dest);
+        }
+
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), OtRngCoreError> {
+            (self.0)(dest);
+
+            Ok(())
+        }
+    }
+
+    #[cfg(feature = "esp")]
+    pub mod esp {
+        use esp_hal::peripheral::{Peripheral, PeripheralRef};
+
+        use openthread::esp::EspRadio;
+
+        /// A `ThreadRadioProvider` implementation for the ESP32 family of chips.
+        pub struct EspThreadRadioProvider<'d> {
+            _radio_peripheral: PeripheralRef<'d, esp_hal::peripherals::IEEE802154>,
+            _radio_clk_peripheral: PeripheralRef<'d, esp_hal::peripherals::RADIO_CLK>,
+        }
+
+        impl<'d> EspThreadRadioProvider<'d> {
+            /// Create a new instance of the `EspThreadRadioDriverProvider` type.
+            ///
+            /// # Arguments
+            /// - `peripheral` - The Thread radio peripheral instance.
+            pub fn new(
+                radio_peripheral: impl Peripheral<P = esp_hal::peripherals::IEEE802154> + 'd,
+                radio_clk_peripheral: impl Peripheral<P = esp_hal::peripherals::RADIO_CLK> + 'd,
+            ) -> Self {
+                Self {
+                    _radio_peripheral: radio_peripheral.into_ref(),
+                    _radio_clk_peripheral: radio_clk_peripheral.into_ref(),
+                }
+            }
+        }
+
+        impl super::ThreadRadioProvider for EspThreadRadioProvider<'_> {
+            type Radio<'t>
+                = EspRadio<'t>
+            where
+                Self: 't;
+
+            async fn provide(&mut self) -> Self::Radio<'_> {
+                // See https://github.com/esp-rs/esp-hal/issues/3238
+                //EspRadio::new(openthread::esp::Ieee802154::new(&mut self.radio_peripheral, &mut self.radio_clk_peripheral))
+                EspRadio::new(openthread::esp::Ieee802154::new(
+                    unsafe { esp_hal::peripherals::IEEE802154::steal() },
+                    unsafe { esp_hal::peripherals::RADIO_CLK::steal() },
+                ))
+            }
+        }
+    }
+}
+
+// Wifi: Type aliases and state structs for an Embassy Matter stack running over a Wifi network and BLE.
+pub mod wifi {
+    use core::mem::MaybeUninit;
+    use core::pin::pin;
+
+    use edge_nal_embassy::Udp;
+
+    use embassy_futures::select::select;
+
+    use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+    use rs_matter_stack::matter::error::Error;
+    use rs_matter_stack::matter::utils::init::{init, Init};
+    use rs_matter_stack::matter::utils::rand::Rand;
+    use rs_matter_stack::matter::utils::select::Coalesce;
+    use rs_matter_stack::matter::utils::sync::IfMutex;
+    use rs_matter_stack::network::{Embedding, Network};
+    use rs_matter_stack::wireless::traits::{
+        Controller, Wifi, WifiData, Wireless, WirelessTask, NC,
+    };
+
+    use crate::nal::{create_net_stack, MatterStackResources, MatterUdpBuffers};
+    use crate::netif::EmbassyNetif;
+
+    use super::EmbassyWirelessMatterStack;
+
+    /// A type alias for an Embassy Matter stack running over Wifi (and BLE, during commissioning).
+    pub type EmbassyWifiMatterStack<'a, E> =
+        EmbassyWirelessMatterStack<'a, Wifi, EmbassyNetContext, E>;
+
+    /// A type alias for an Embassy Matter stack running over Wifi (and BLE, during commissioning).
+    ///
+    /// Unlike `EmbassyWifiMatterStack`, this type alias runs the commissioning in a non-concurrent mode,
+    /// where the device runs either BLE or Wifi, but not both at the same time.
+    ///
+    /// This is useful to save memory by only having one of the stacks active at any point in time.
+    ///
+    /// Note that Alexa does not (yet) work with non-concurrent commissioning.
+    pub type EmbassyWifiNCMatterStack<'a, E> =
+        EmbassyWirelessMatterStack<'a, Wifi<NC>, EmbassyNetContext, E>;
 
     /// A companion trait of `EmbassyWifi` for providing a Wifi driver and controller.
     pub trait WifiDriverProvider {
@@ -408,7 +704,7 @@ pub mod wifi {
         {
             Self::wrap(
                 provider,
-                stack.network().embedding().embedding().enet_context(),
+                stack.network().embedding().embedding().net_context(),
                 stack.matter().rand(),
             )
         }
@@ -455,6 +751,46 @@ pub mod wifi {
             });
 
             select(&mut main, &mut run).coalesce().await
+        }
+    }
+
+    /// A context (storage) for the network layer of the Matter stack.
+    pub struct EmbassyNetContext {
+        buffers: MatterUdpBuffers,
+        resources: IfMutex<CriticalSectionRawMutex, MatterStackResources>,
+    }
+
+    impl EmbassyNetContext {
+        /// Create a new instance of the `EmbassyNetContext` type.
+        pub const fn new() -> Self {
+            Self {
+                buffers: MatterUdpBuffers::new(),
+                resources: IfMutex::new(MatterStackResources::new()),
+            }
+        }
+
+        /// Return an in-place initializer for the `EmbassyNetContext` type.
+        pub fn init() -> impl Init<Self> {
+            init!(Self {
+                // TODO: Implement init constructor for `UdpBuffers`
+                buffers: MatterUdpBuffers::new(),
+                // Note: below will break if `HostResources` stops being a bunch of `MaybeUninit`s
+                resources <- IfMutex::init(unsafe { MaybeUninit::<MatterStackResources>::uninit().assume_init() }),
+            })
+        }
+    }
+
+    impl Default for EmbassyNetContext {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl Embedding for EmbassyNetContext {
+        const INIT: Self = Self::new();
+
+        fn init() -> impl Init<Self> {
+            EmbassyNetContext::init()
         }
     }
 

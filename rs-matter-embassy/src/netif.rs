@@ -1,4 +1,4 @@
-//! Network interface: `EmbassyNetif - a `Netif` trait implementation for `embassy-net`
+//! Network interface: `EmbassyNetif` - a `Netif` trait implementation for `embassy-net`
 
 use core::cell::Cell;
 

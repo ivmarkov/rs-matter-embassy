@@ -5,18 +5,23 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [[bin]]
-name = "light"
+name = "light_wifi"
 harness = false
 
 [[bin]]
 name = "light_eth"
 harness = false
 
+[[bin]]
+name = "light_thread"
+harness = false
+
 #[patch.'https://github.com/ivmarkov/rs-matter-stack']
 #rs-matter-stack = { path = "../../../rs-matter-stack" }
-[patch.'https://github.com/embassy-rs/trouble']
-trouble-host = { version = "0.1", git = "https://github.com/ivmarkov/trouble", branch = "restore-gattdata-process" }
+#[patch.'https://github.com/embassy-rs/trouble']
 #trouble-host = { version = "0.1", path = "../../../trouble/host" }
+[patch.'https://github.com/ivmarkov/esp-openthread']
+openthread = { version = "0.1", path = "../../../esp-openthread/openthread" }
 
 [patch.crates-io]
 #rs-matter = { git = "https://github.com/project-chip/rs-matter" }
@@ -42,7 +47,7 @@ static_cell = "2"
 portable-atomic = "1"
 
 [features]
-default = ["esp32c3"]
+default = ["esp32c6"]
 esp32 = ["esp-hal/esp32", "esp-backtrace/esp32", "esp-hal-embassy/esp32", "esp-println/esp32", "esp-wifi/esp32", "portable-atomic/critical-section"]
 esp32c2 = ["esp-hal/esp32c2", "esp-backtrace/esp32c2", "esp-hal-embassy/esp32c2", "esp-println/esp32c2", "esp-wifi/esp32c2", "portable-atomic/critical-section"]
 esp32c3 = ["esp-hal/esp32c3", "esp-backtrace/esp32c3", "esp-hal-embassy/esp32c3", "esp-println/esp32c3", "esp-wifi/esp32c3", "portable-atomic/unsafe-assume-single-core"]

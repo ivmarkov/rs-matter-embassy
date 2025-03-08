@@ -17,6 +17,7 @@ pub mod eth;
 pub mod matter;
 pub mod nal;
 pub mod netif;
+pub mod ot;
 #[cfg(feature = "rs-matter-stack")]
 pub mod persist;
 pub mod rand;

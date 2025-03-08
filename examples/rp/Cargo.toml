@@ -5,7 +5,7 @@ edition = "2021"
 resolver = "2"
 
 [[bin]]
-name = "light"
+name = "light_wifi"
 harness = false
 
 [[bin]]
@@ -14,9 +14,10 @@ harness = false
 
 #[patch.'https://github.com/ivmarkov/rs-matter-stack']
 #rs-matter-stack = { path = "../../../rs-matter-stack" }
-[patch.'https://github.com/embassy-rs/trouble']
-trouble-host = { version = "0.1", git = "https://github.com/ivmarkov/trouble", branch = "restore-gattdata-process" }
+#[patch.'https://github.com/embassy-rs/trouble']
 #trouble-host = { version = "0.1", path = "../../../trouble/host" }
+[patch.'https://github.com/ivmarkov/esp-openthread']
+openthread = { version = "0.1", path = "../../../esp-openthread/openthread" }
 
 [patch.crates-io]
 #rs-matter = { git = "https://github.com/project-chip/rs-matter" }
