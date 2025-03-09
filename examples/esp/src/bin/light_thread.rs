@@ -1,7 +1,8 @@
-//! An example utilizing the `EmbassyThreadMatterStack` struct.
+//! An example utilizing the `EmbassyThreadNCMatterStack` struct.
 //!
 //! As the name suggests, this Matter stack assembly uses Thread as the main transport,
-//! and thus BLE for commissioning.
+//! and thus BLE for commissioning, in non-concurrent commissioning mode
+//! (the IEEE802154 radio and BLE do not run at the same time).
 //!
 //! If you want to use Ethernet, utilize `EmbassyEthMatterStack` instead.
 //! If you want to use non-concurrent commissioning, utilize `EmbassyThreadNCMatterStack` instead
@@ -40,7 +41,7 @@ use rs_matter_embassy::stack::test_device::{
 use rs_matter_embassy::stack::MdnsType;
 use rs_matter_embassy::wireless::esp::EspBleControllerProvider;
 use rs_matter_embassy::wireless::thread::esp::EspThreadRadioProvider;
-use rs_matter_embassy::wireless::thread::{EmbassyThread, EmbassyThreadMatterStack};
+use rs_matter_embassy::wireless::thread::{EmbassyThread, EmbassyThreadNCMatterStack};
 use rs_matter_embassy::wireless::EmbassyBle;
 
 extern crate alloc;
@@ -93,7 +94,7 @@ async fn main(_s: Spawner) {
     // Allocate the Matter stack.
     // For MCUs, it is best to allocate it statically, so as to avoid program stack blowups (its memory footprint is ~ 35 to 50KB).
     // It is also (currently) a mandatory requirement when the wireless stack variation is used.
-    let stack = &*Box::leak(Box::new_uninit()).init_with(EmbassyThreadMatterStack::<()>::init(
+    let stack = &*Box::leak(Box::new_uninit()).init_with(EmbassyThreadNCMatterStack::<()>::init(
         &BasicInfoConfig {
             vid: TEST_VID,
             pid: TEST_PID,
@@ -194,7 +195,7 @@ const LIGHT_ENDPOINT_ID: u16 = 1;
 const NODE: Node = Node {
     id: 0,
     endpoints: &[
-        EmbassyThreadMatterStack::<()>::root_metadata(),
+        EmbassyThreadNCMatterStack::<()>::root_metadata(),
         Endpoint {
             id: LIGHT_ENDPOINT_ID,
             device_types: &[DEV_TYPE_ON_OFF_LIGHT],

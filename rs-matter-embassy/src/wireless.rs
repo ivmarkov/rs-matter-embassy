@@ -285,8 +285,8 @@ pub mod thread {
     use rs_matter_stack::matter::utils::sync::IfMutex;
     use rs_matter_stack::network::{Embedding, Network};
     use rs_matter_stack::wireless::traits::{
-        Controller, NetworkCredentials, Thread, ThreadData, ThreadId, ThreadScanResult, Wireless,
-        WirelessData, WirelessTask, NC,
+        ConcurrencyMode, Controller, NetworkCredentials, Thread, ThreadData, ThreadId,
+        ThreadScanResult, Wireless, WirelessData, WirelessTask, NC,
     };
 
     use crate::ot::{MatterSrpResources, MatterUdpResources, OtNetif};
@@ -369,8 +369,12 @@ pub mod thread {
         T: ThreadRadioProvider,
     {
         /// Create a new instance of the `EmbassyThread` type.
-        pub fn new<E>(provider: T, stack: &'a EmbassyThreadMatterStack<'a, E>) -> Self
+        pub fn new<E, M>(
+            provider: T,
+            stack: &'a EmbassyWirelessMatterStack<'a, Thread<M>, OtNetContext, E>,
+        ) -> Self
         where
+            M: ConcurrencyMode,
             E: Embedding + 'static,
         {
             Self::wrap(
@@ -668,7 +672,7 @@ pub mod wifi {
     use rs_matter_stack::matter::utils::sync::IfMutex;
     use rs_matter_stack::network::{Embedding, Network};
     use rs_matter_stack::wireless::traits::{
-        Controller, Wifi, WifiData, Wireless, WirelessTask, NC,
+        ConcurrencyMode, Controller, Wifi, WifiData, Wireless, WirelessTask, NC,
     };
 
     use crate::nal::{create_net_stack, MatterStackResources, MatterUdpBuffers};
@@ -764,8 +768,12 @@ pub mod wifi {
         T: WifiDriverProvider,
     {
         /// Create a new instance of the `EmbassyWifi` type.
-        pub fn new<E>(provider: T, stack: &'a EmbassyWifiMatterStack<'a, E>) -> Self
+        pub fn new<E, M>(
+            provider: T,
+            stack: &'a EmbassyWirelessMatterStack<'a, Wifi<M>, EmbassyNetContext, E>,
+        ) -> Self
         where
+            M: ConcurrencyMode,
             E: Embedding + 'static,
         {
             Self::wrap(
