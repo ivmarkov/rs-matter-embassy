@@ -273,7 +273,9 @@ pub mod thread {
 
     use log::error;
 
-    use openthread::{OpenThread, OtError, OtResources, OtRngCore, OtRngCoreError, Radio};
+    use openthread::{
+        Channels, OpenThread, OtError, OtResources, OtRngCore, OtRngCoreError, Radio,
+    };
 
     use rs_matter_stack::matter::error::{Error, ErrorCode};
     use rs_matter_stack::matter::tlv::OctetsOwned;
@@ -490,7 +492,7 @@ pub mod thread {
             const SCAN_DURATION_MILLIS: u16 = 2000;
 
             self.0
-                .scan(0, SCAN_DURATION_MILLIS, |scan_result| {
+                .scan(Channels::all(), SCAN_DURATION_MILLIS, |scan_result| {
                     if scan_result
                         .map(|sr| {
                             network_id
