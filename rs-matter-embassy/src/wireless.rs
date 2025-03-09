@@ -2,8 +2,8 @@
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 
-use rs_matter::tlv::{FromTLV, ToTLV};
 use rs_matter_stack::matter::error::Error;
+use rs_matter_stack::matter::tlv::{FromTLV, ToTLV};
 use rs_matter_stack::matter::utils::init::{init, Init};
 use rs_matter_stack::matter::utils::rand::Rand;
 use rs_matter_stack::network::{Embedding, Network};
@@ -271,17 +271,20 @@ pub mod thread {
     use embassy_futures::select::select;
     use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 
-    use openthread::{OpenThread, OtResources, OtRngCore, OtRngCoreError, Radio};
+    use log::error;
 
-    use rs_matter_stack::matter::error::Error;
+    use openthread::{OpenThread, OtError, OtResources, OtRngCore, OtRngCoreError, Radio};
+
+    use rs_matter_stack::matter::error::{Error, ErrorCode};
+    use rs_matter_stack::matter::tlv::OctetsOwned;
     use rs_matter_stack::matter::utils::init::{init, Init};
     use rs_matter_stack::matter::utils::rand::Rand;
     use rs_matter_stack::matter::utils::select::Coalesce;
     use rs_matter_stack::matter::utils::sync::IfMutex;
     use rs_matter_stack::network::{Embedding, Network};
     use rs_matter_stack::wireless::traits::{
-        Controller, NetworkCredentials, Thread, ThreadData, Wireless, WirelessData, WirelessTask,
-        NC,
+        Controller, NetworkCredentials, Thread, ThreadData, ThreadId, ThreadScanResult, Wireless,
+        WirelessData, WirelessTask, NC,
     };
 
     use crate::ot::{MatterSrpResources, MatterUdpResources, OtNetif};
@@ -479,19 +482,60 @@ pub mod thread {
             network_id: Option<
                 &<<Self::Data as WirelessData>::NetworkCredentials as NetworkCredentials>::NetworkId,
             >,
-            callback: F,
+            mut callback: F,
         ) -> Result<(), Error>
         where
             F: FnMut(Option<&<Self::Data as WirelessData>::ScanResult>) -> Result<(), Error>,
         {
-            todo!()
+            const SCAN_DURATION_MILLIS: u16 = 2000;
+
+            self.0
+                .scan(0, SCAN_DURATION_MILLIS, |scan_result| {
+                    if scan_result
+                        .map(|sr| {
+                            network_id
+                                .map(|id| id.0.vec.as_slice() == sr.extended_pan_id.to_be_bytes())
+                                .unwrap_or(true)
+                        })
+                        .unwrap_or(true)
+                    {
+                        let _ = callback(
+                            scan_result
+                                .map(|scan_result| ThreadScanResult {
+                                    pan_id: scan_result.pan_id,
+                                    extended_pan_id: scan_result.extended_pan_id,
+                                    network_name: scan_result
+                                        .network_name
+                                        .try_into()
+                                        .unwrap_or(heapless::String::new()),
+                                    channel: scan_result.channel as _,
+                                    version: scan_result.version,
+                                    // TODO: Should be Vec<u8, 8>
+                                    extended_address:
+                                        rs_matter_stack::matter::utils::storage::Vec::from_slice(
+                                            &scan_result.ext_address.to_be_bytes(),
+                                        )
+                                        .unwrap_or(
+                                            rs_matter_stack::matter::utils::storage::Vec::new(),
+                                        ),
+                                    rssi: scan_result.rssi,
+                                    lqi: scan_result.lqi,
+                                })
+                                .as_ref(),
+                        );
+                    }
+                })
+                .await
+                .map_err(to_matter_err)
         }
 
         async fn connect(
             &mut self,
             creds: &<Self::Data as WirelessData>::NetworkCredentials,
         ) -> Result<(), Error> {
-            todo!()
+            self.0
+                .set_active_dataset_tlv(&creds.op_dataset)
+                .map_err(to_matter_err)
         }
 
         async fn connected_network(
@@ -502,12 +546,32 @@ pub mod thread {
             >,
             Error,
         > {
-            todo!()
+            let status = self.0.net_status();
+
+            Ok(status
+                .role
+                .is_connected()
+                .then_some(status.ext_pan_id)
+                .flatten()
+                .map(|id| {
+                    ThreadId(OctetsOwned {
+                        vec: rs_matter_stack::matter::utils::storage::Vec::from_slice(
+                            &u64::to_be_bytes(id),
+                        )
+                        .unwrap(),
+                    })
+                }))
         }
 
         async fn stats(&mut self) -> Result<<Self::Data as WirelessData>::Stats, Error> {
             Ok(())
         }
+    }
+
+    fn to_matter_err(err: OtError) -> Error {
+        error!("OpenThread error: {:?}", err);
+
+        ErrorCode::NoNetworkInterface.into()
     }
 
     /// Adapt `rs-matter`'s `Rand` to `RngCore` necessary for OpenThread
