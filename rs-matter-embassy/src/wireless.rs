@@ -675,8 +675,8 @@ pub mod wifi {
         ConcurrencyMode, Controller, Wifi, WifiData, Wireless, WirelessTask, NC,
     };
 
-    use crate::nal::{create_net_stack, MatterStackResources, MatterUdpBuffers};
-    use crate::netif::EmbassyNetif;
+    use crate::nal::{create_enet_stack, EnetMatterStackResources, EnetMatterUdpBuffers};
+    use crate::netif::EnetNetif;
 
     use super::EmbassyWirelessMatterStack;
 
@@ -812,9 +812,9 @@ pub mod wifi {
             let mut seed = [0; core::mem::size_of::<u64>()];
             (self.rand)(&mut seed);
 
-            let (stack, mut runner) = create_net_stack(driver, u64::from_le_bytes(seed), resources);
+            let (stack, mut runner) = create_enet_stack(driver, u64::from_le_bytes(seed), resources);
 
-            let netif = EmbassyNetif::new(stack);
+            let netif = EnetNetif::new(stack);
             let udp = Udp::new(stack, buffers);
 
             let mut main = pin!(task.run(netif, udp, controller));
@@ -830,16 +830,16 @@ pub mod wifi {
 
     /// A context (storage) for the network layer of the Matter stack.
     pub struct EmbassyNetContext {
-        buffers: MatterUdpBuffers,
-        resources: IfMutex<CriticalSectionRawMutex, MatterStackResources>,
+        buffers: EnetMatterUdpBuffers,
+        resources: IfMutex<CriticalSectionRawMutex, EnetMatterStackResources>,
     }
 
     impl EmbassyNetContext {
         /// Create a new instance of the `EmbassyNetContext` type.
         pub const fn new() -> Self {
             Self {
-                buffers: MatterUdpBuffers::new(),
-                resources: IfMutex::new(MatterStackResources::new()),
+                buffers: EnetMatterUdpBuffers::new(),
+                resources: IfMutex::new(EnetMatterStackResources::new()),
             }
         }
 
@@ -847,9 +847,9 @@ pub mod wifi {
         pub fn init() -> impl Init<Self> {
             init!(Self {
                 // TODO: Implement init constructor for `UdpBuffers`
-                buffers: MatterUdpBuffers::new(),
+                buffers: EnetMatterUdpBuffers::new(),
                 // Note: below will break if `HostResources` stops being a bunch of `MaybeUninit`s
-                resources <- IfMutex::init(unsafe { MaybeUninit::<MatterStackResources>::uninit().assume_init() }),
+                resources <- IfMutex::init(unsafe { MaybeUninit::<EnetMatterStackResources>::uninit().assume_init() }),
             })
         }
     }

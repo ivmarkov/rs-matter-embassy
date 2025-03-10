@@ -35,8 +35,10 @@ use rs_matter_embassy::matter::data_model::objects::{Dataver, Endpoint, HandlerC
 use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
-use rs_matter_embassy::nal::{create_net_stack, MatterStackResources, MatterUdpBuffers, Udp};
-use rs_matter_embassy::netif::EmbassyNetif;
+use rs_matter_embassy::nal::{
+    create_enet_stack, EnetMatterStackResources, EnetMatterUdpBuffers, Udp,
+};
+use rs_matter_embassy::netif::EnetNetif;
 use rs_matter_embassy::rand::esp::{esp_init_rand, esp_rand};
 use rs_matter_embassy::stack::persist::DummyPersist;
 use rs_matter_embassy::stack::test_device::{
@@ -115,10 +117,10 @@ async fn main(_s: Spawner) {
     let (wifi_interface, controller) =
         esp_wifi::wifi::new_with_mode(&init, wifi, WifiStaDevice).unwrap();
 
-    let (net_stack, mut net_runner) = create_net_stack(
+    let (net_stack, mut net_runner) = create_enet_stack(
         wifi_interface,
         ((rng.random() as u64) << 32) | rng.random() as u64,
-        Box::leak(Box::new_uninit()).init_with(MatterStackResources::new()),
+        Box::leak(Box::new_uninit()).init_with(EnetMatterStackResources::new()),
     );
 
     // Our "light" on-off cluster.
@@ -150,11 +152,11 @@ async fn main(_s: Spawner) {
     // not being very intelligent w.r.t. stack usage in async functions
     let mut matter = pin!(stack.run(
         // The Matter stack needs access to the netif so as to detect network going up/down
-        EmbassyNetif::new(net_stack),
+        EnetNetif::new(net_stack),
         // The Matter stack needs to open two UDP sockets
         Udp::new(
             net_stack,
-            Box::leak(Box::new_uninit()).init_with(MatterUdpBuffers::new())
+            Box::leak(Box::new_uninit()).init_with(EnetMatterUdpBuffers::new())
         ),
         // The Matter stack needs a persister to store its state
         // `EmbassyPersist`+`EmbassyKvBlobStore` saves to a user-supplied NOR Flash region

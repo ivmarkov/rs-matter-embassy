@@ -1,4 +1,4 @@
-//! Network interface: `EmbassyNetif` - a `Netif` trait implementation for `embassy-net`
+//! Network interface: `EnetNetif` - a `Netif` trait implementation for `embassy-net`
 
 use core::cell::Cell;
 
@@ -13,12 +13,12 @@ use rs_matter_stack::netif::{Netif, NetifConf};
 const TIMEOUT_PERIOD_SECS: u8 = 5;
 
 /// A `Netif` trait implementation for `embassy-net`
-pub struct EmbassyNetif<'d> {
+pub struct EnetNetif<'d> {
     stack: Stack<'d>,
     up: Mutex<CriticalSectionRawMutex, Cell<bool>>,
 }
 
-impl<'d> EmbassyNetif<'d> {
+impl<'d> EnetNetif<'d> {
     /// Create a new `EmbassyNetif` instance
     pub fn new(stack: Stack<'d>) -> Self {
         Self {
@@ -70,13 +70,13 @@ impl<'d> EmbassyNetif<'d> {
     }
 }
 
-impl Netif for EmbassyNetif<'_> {
+impl Netif for EnetNetif<'_> {
     async fn get_conf(&self) -> Result<Option<NetifConf>, Error> {
-        Ok(EmbassyNetif::get_conf(self))
+        Ok(EnetNetif::get_conf(self))
     }
 
     async fn wait_conf_change(&self) -> Result<(), Error> {
-        EmbassyNetif::wait_conf_change(self).await;
+        EnetNetif::wait_conf_change(self).await;
 
         Ok(())
     }
