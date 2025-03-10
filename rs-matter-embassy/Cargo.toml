@@ -17,9 +17,10 @@ harness = false
 
 #[patch.'https://github.com/ivmarkov/rs-matter-stack']
 #rs-matter-stack = { path = "../../rs-matter-stack" }
-[patch.'https://github.com/embassy-rs/trouble']
-trouble-host = { version = "0.1", git = "https://github.com/ivmarkov/trouble", branch = "restore-gattdata-process" }
+#[patch.'https://github.com/embassy-rs/trouble']
 #trouble-host = { version = "0.1", path = "../../../trouble/host" }
+#[patch.'https://github.com/ivmarkov/esp-openthread']
+#openthread = { version = "0.1", path = "../../esp-openthread/openthread" }
 
 [patch.crates-io]
 #rs-matter = { git = "https://github.com/project-chip/rs-matter" }
@@ -34,7 +35,8 @@ opt-level = "z"
 
 [features]
 default = ["rs-matter-stack"]
-esp = ["esp-wifi", "esp-hal"]
+embassy-net = ["dep:embassy-net", "dep:edge-nal-embassy"]
+esp = ["esp-wifi", "esp-hal", "openthread?/esp-ieee802154"]
 rp = ["cyw43", "cyw43-pio", "embassy-rp", "rand_core"]
 
 [dependencies]
@@ -43,17 +45,22 @@ heapless = "0.8"
 embassy-futures = "0.1"
 embassy-sync = "0.6"
 embassy-time = "0.4"
-embassy-net = { version = "0.6", features = ["proto-ipv4", "proto-ipv6", "multicast", "dhcpv4"] }
-edge-nal-embassy = "0.5"
-embedded-storage-async = "0.4.1"
-sequential-storage = "3"
-trouble-host = { version = "0.1", git = "https://github.com/embassy-rs/trouble" }
-bt-hci = "0.2"
 embedded-io = "0.6"
 scopeguard = { version = "1", default-features = false }
 rs-matter = { version = "0.1", default-features = false, features = ["rustcrypto"] }
 rs-matter-stack = { git = "https://github.com/ivmarkov/rs-matter-stack", default-features = false, optional = true, features = ["rustcrypto"] }
 static_cell = "2"
+
+embedded-storage-async = "0.4.1"
+sequential-storage = "3"
+
+embassy-net = { version = "0.6", optional = true, features = ["proto-ipv4", "proto-ipv6", "multicast", "dhcpv4"] }
+edge-nal-embassy = { version = "0.5", optional = true }
+
+trouble-host = { version = "0.1", git = "https://github.com/embassy-rs/trouble" }
+bt-hci = "0.2"
+
+openthread = { version = "0.1", git = "https://github.com/ivmarkov/esp-openthread", optional = true, features = ["udp", "srp", "edge-nal"] }
 
 # Only necessary when `rs-matter-embassy` is providing extra-sugar for the `esp32*` chips family
 esp-wifi = { version = "0.12", optional = true, features = ["wifi", "ble"] }

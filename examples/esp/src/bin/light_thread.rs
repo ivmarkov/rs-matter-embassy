@@ -1,35 +1,28 @@
-//! An example utilizing the `EmbassyEthMatterStack` struct.
-//! As the name suggests, this Matter stack assembly uses Ethernet as the main transport, as well as for commissioning.
+//! An example utilizing the `EmbassyThreadNCMatterStack` struct.
 //!
-//! Notice thart we actually don't use Ethernet for real, as ESP32s don't have Ethernet ports out of the box.
-//! Instead, we utilize Wifi, which - from the POV of Matter - is indistinguishable from Ethernet as long as the Matter
-//! stack is not concerned with connecting to the Wifi network, managing its credentials etc. and can assume it "pre-exists".
+//! As the name suggests, this Matter stack assembly uses Thread as the main transport,
+//! and thus BLE for commissioning, in non-concurrent commissioning mode
+//! (the IEEE802154 radio and BLE cannot not run at the same time yet with `esp-hal`).
+//!
+//! If you want to use Ethernet, utilize `EmbassyEthMatterStack` instead.
 //!
 //! The example implements a fictitious Light device (an On-Off Matter cluster).
 #![no_std]
 #![no_main]
 
-use core::env;
 use core::mem::MaybeUninit;
 use core::pin::pin;
 
 use alloc::boxed::Box;
-
 use embassy_executor::Spawner;
-use embassy_futures::select::select4;
+use embassy_futures::select::select;
 use embassy_time::{Duration, Timer};
 
 use esp_backtrace as _;
 use esp_hal::{clock::CpuClock, timer::timg::TimerGroup};
-use esp_wifi::wifi::{
-    ClientConfiguration, Configuration, WifiController, WifiEvent, WifiStaDevice, WifiState,
-};
 
 use log::info;
 
-use rs_matter_embassy::enet::{
-    create_enet_stack, EnetMatterStackResources, EnetMatterUdpBuffers, EnetNetif, Udp,
-};
 use rs_matter_embassy::epoch::epoch;
 use rs_matter_embassy::matter::data_model::cluster_basic_information::BasicInfoConfig;
 use rs_matter_embassy::matter::data_model::cluster_on_off;
@@ -38,19 +31,20 @@ use rs_matter_embassy::matter::data_model::objects::{Dataver, Endpoint, HandlerC
 use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
+use rs_matter_embassy::matter::MATTER_PORT;
 use rs_matter_embassy::rand::esp::{esp_init_rand, esp_rand};
+use rs_matter_embassy::stack::mdns::MatterMdnsServices;
 use rs_matter_embassy::stack::persist::DummyPersist;
 use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
-use rs_matter_embassy::stack::utils::futures::IntoFaillble;
 use rs_matter_embassy::stack::MdnsType;
-use rs_matter_embassy::EmbassyEthMatterStack;
+use rs_matter_embassy::wireless::esp::EspBleControllerProvider;
+use rs_matter_embassy::wireless::thread::esp::EspThreadRadioProvider;
+use rs_matter_embassy::wireless::thread::{EmbassyThread, EmbassyThreadNCMatterStack};
+use rs_matter_embassy::wireless::EmbassyBle;
 
 extern crate alloc;
-
-const WIFI_SSID: &str = env!("WIFI_SSID");
-const WIFI_PASS: &str = env!("WIFI_PASS");
 
 #[esp_hal_embassy::main]
 async fn main(_s: Spawner) {
@@ -58,8 +52,13 @@ async fn main(_s: Spawner) {
 
     info!("Starting...");
 
+    // Heap strictly necessary only for BLE and for the only Matter dependency which needs (~4KB) alloc - `x509`
+    // However since `esp32` specifically has a disjoint heap which causes bss size troubles, it is easier
+    // to allocate the statics once from heap as well
+    init_heap();
+
     // == Step 1: ==
-    // Necessary `esp-hal` and `esp-wifi` initialization boilerplate
+    // Necessary `esp-hal` initialization boilerplate
 
     let peripherals = esp_hal::init({
         let mut config = esp_hal::Config::default();
@@ -67,19 +66,18 @@ async fn main(_s: Spawner) {
         config
     });
 
-    // Heap strictly necessary only for Wifi and for the only Matter dependency which needs (~4KB) alloc - `x509`
-    // However since `esp32` specifically has a disjoint heap which causes bss size troubles, it is easier
-    // to allocate the statics once from heap as well
-    init_heap();
-
     let timg0 = TimerGroup::new(peripherals.TIMG0);
-    let mut rng = esp_hal::rng::Rng::new(peripherals.RNG);
+    let rng = esp_hal::rng::Rng::new(peripherals.RNG);
 
     // To erase generics, `Matter` takes a rand `fn` rather than a trait or a closure,
     // so we need to initialize the global `rand` fn once
     esp_init_rand(rng);
 
     let init = esp_wifi::init(timg0.timer0, rng, peripherals.RADIO_CLK).unwrap();
+
+    // TODO: Rather than doing this here, move the `esp_wifi::init` call to the `EmbassyWifi` impl
+    // Also see https://github.com/esp-rs/esp-hal/issues/3239
+    let radio_clk_ieee802154 = unsafe { esp_hal::peripherals::RADIO_CLK::steal() };
 
     #[cfg(not(feature = "esp32"))]
     {
@@ -92,36 +90,27 @@ async fn main(_s: Spawner) {
         esp_hal_embassy::init(timg0.timer1);
     }
 
-    let stack = Box::leak(Box::new_uninit()).init_with(EmbassyEthMatterStack::<()>::init(
-        &BasicInfoConfig {
-            vid: TEST_VID,
-            pid: TEST_PID,
-            hw_ver: 2,
-            sw_ver: 1,
-            sw_ver_str: "1",
-            serial_no: "aabbccdd",
-            device_name: "MyLight",
-            product_name: "ACME Light",
-            vendor_name: "ACME",
-        },
+    // == Step 2: ==
+    // Replace the built-in Matter mDNS responder with a bridge that delegates
+    // all mDNS work to the OpenThread SRP client.
+    // Thread is not friendly to IpV6 multicast, so we have to use SRP instead.
+    let mdns_services = &*Box::leak(Box::new_uninit())
+        .init_with(MatterMdnsServices::init(&TEST_BASIC_INFO, MATTER_PORT));
+
+    // == Step 3: ==
+    // Allocate the Matter stack.
+    // For MCUs, it is best to allocate it statically, so as to avoid program stack blowups (its memory footprint is ~ 35 to 50KB).
+    // It is also (currently) a mandatory requirement when the wireless stack variation is used.
+    let stack = &*Box::leak(Box::new_uninit()).init_with(EmbassyThreadNCMatterStack::<()>::init(
+        &TEST_BASIC_INFO,
         TEST_BASIC_COMM_DATA,
         &TEST_DEV_ATT,
-        MdnsType::Builtin,
+        MdnsType::Provided(mdns_services),
         epoch,
         esp_rand,
     ));
 
-    // Configure and start the Wifi first
-    let wifi = peripherals.WIFI;
-    let (wifi_interface, controller) =
-        esp_wifi::wifi::new_with_mode(&init, wifi, WifiStaDevice).unwrap();
-
-    let (net_stack, mut net_runner) = create_enet_stack(
-        wifi_interface,
-        ((rng.random() as u64) << 32) | rng.random() as u64,
-        Box::leak(Box::new_uninit()).init_with(EnetMatterStackResources::new()),
-    );
-
+    // == Step 4: ==
     // Our "light" on-off cluster.
     // Can be anything implementing `rs_matter::data_model::AsyncHandler`
     let on_off = cluster_on_off::OnOffCluster::new(Dataver::new_rand(stack.matter().rand()));
@@ -146,17 +135,21 @@ async fn main(_s: Spawner) {
             ))),
         );
 
+    // == Step 5: ==
     // Run the Matter stack with our handler
     // Using `pin!` is completely optional, but saves some memory due to `rustc`
     // not being very intelligent w.r.t. stack usage in async functions
+    //
+    // This step can be repeated in that the stack can be stopped and started multiple times, as needed.
     let mut matter = pin!(stack.run(
-        // The Matter stack needs access to the netif so as to detect network going up/down
-        EnetNetif::new(net_stack),
-        // The Matter stack needs to open two UDP sockets
-        Udp::new(
-            net_stack,
-            Box::leak(Box::new_uninit()).init_with(EnetMatterUdpBuffers::new())
+        // The Matter stack needs to instantiate an `openthread` Radio
+        EmbassyThread::new(
+            EspThreadRadioProvider::new(peripherals.IEEE802154, radio_clk_ieee802154),
+            mdns_services,
+            stack
         ),
+        // The Matter stack needs BLE
+        EmbassyBle::new(EspBleControllerProvider::new(&init, peripherals.BT), stack),
         // The Matter stack needs a persister to store its state
         // `EmbassyPersist`+`EmbassyKvBlobStore` saves to a user-supplied NOR Flash region
         // However, for this demo and for simplicity, we use a dummy persister that does nothing
@@ -189,52 +182,22 @@ async fn main(_s: Spawner) {
     });
 
     // Schedule the Matter run & the device loop together
-    select4(
-        &mut matter,
-        &mut device,
-        connection(controller).into_fallible(),
-        async {
-            net_runner.run().await;
-            #[allow(unreachable_code)]
-            Ok(())
-        },
-    )
-    .coalesce()
-    .await
-    .unwrap();
+    select(&mut matter, &mut device).coalesce().await.unwrap();
 }
 
-async fn connection(mut controller: WifiController<'_>) {
-    info!("start connection task");
-    info!("Device capabilities: {:?}", controller.capabilities());
-    loop {
-        if esp_wifi::wifi::wifi_state() == WifiState::StaConnected {
-            // wait until we're no longer connected
-            controller.wait_for_event(WifiEvent::StaDisconnected).await;
-            Timer::after(Duration::from_millis(5000)).await
-        }
-        if !matches!(controller.is_started(), Ok(true)) {
-            let client_config = Configuration::Client(ClientConfiguration {
-                ssid: WIFI_SSID.try_into().unwrap(),
-                password: WIFI_PASS.try_into().unwrap(),
-                ..Default::default()
-            });
-            controller.set_configuration(&client_config).unwrap();
-            info!("Starting wifi");
-            controller.start_async().await.unwrap();
-            info!("Wifi started!");
-        }
-        info!("About to connect...");
-
-        match controller.connect_async().await {
-            Ok(_) => info!("Wifi connected!"),
-            Err(e) => {
-                info!("Failed to connect to wifi: {e:?}");
-                Timer::after(Duration::from_millis(5000)).await
-            }
-        }
-    }
-}
+/// Basic info about our device
+/// Both the matter stack as well as out mDNS-to-SRP bridge need this, hence extracted out
+const TEST_BASIC_INFO: BasicInfoConfig = BasicInfoConfig {
+    vid: TEST_VID,
+    pid: TEST_PID,
+    hw_ver: 2,
+    sw_ver: 1,
+    sw_ver_str: "1",
+    serial_no: "aabbccdd",
+    device_name: "MyLight",
+    product_name: "ACME Light",
+    vendor_name: "ACME",
+};
 
 /// Endpoint 0 (the root endpoint) always runs
 /// the hidden Matter system clusters, so we pick ID=1
@@ -244,7 +207,7 @@ const LIGHT_ENDPOINT_ID: u16 = 1;
 const NODE: Node = Node {
     id: 0,
     endpoints: &[
-        EmbassyEthMatterStack::<()>::root_metadata(),
+        EmbassyThreadNCMatterStack::<()>::root_metadata(),
         Endpoint {
             id: LIGHT_ENDPOINT_ID,
             device_types: &[DEV_TYPE_ON_OFF_LIGHT],

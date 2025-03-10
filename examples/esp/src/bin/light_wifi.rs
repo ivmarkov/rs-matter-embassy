@@ -51,7 +51,7 @@ async fn main(_s: Spawner) {
 
     info!("Starting...");
 
-    // Heap strictly necessary only for Wifi and for the only Matter dependency which needs (~4KB) alloc - `x509`
+    // Heap strictly necessary only for Wifi+BLE and for the only Matter dependency which needs (~4KB) alloc - `x509`
     // However since `esp32` specifically has a disjoint heap which causes bss size troubles, it is easier
     // to allocate the statics once from heap as well
     init_heap();
