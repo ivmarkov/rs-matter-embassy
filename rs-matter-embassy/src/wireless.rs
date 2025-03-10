@@ -269,8 +269,8 @@ pub mod thread {
     use core::mem::MaybeUninit;
     use core::pin::pin;
 
-    use embassy_futures::select::select;
-    use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+    use embassy_futures::select::select3;
+    use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 
     use log::error;
 
@@ -284,13 +284,14 @@ pub mod thread {
     use rs_matter_stack::matter::utils::rand::Rand;
     use rs_matter_stack::matter::utils::select::Coalesce;
     use rs_matter_stack::matter::utils::sync::IfMutex;
+    use rs_matter_stack::mdns::MatterMdnsServices;
     use rs_matter_stack::network::{Embedding, Network};
     use rs_matter_stack::wireless::traits::{
         ConcurrencyMode, Controller, NetworkCredentials, Thread, ThreadData, ThreadId,
         ThreadScanResult, Wireless, WirelessData, WirelessTask, NC,
     };
 
-    use crate::ot::{MatterSrpResources, MatterUdpResources, OtNetif};
+    use crate::ot::{OtMatterSrpResources, OtMatterUdpResources, OtMdns, OtNetif};
 
     use super::EmbassyWirelessMatterStack;
 
@@ -361,6 +362,7 @@ pub mod thread {
     /// A `Wireless` trait implementation for `openthread`'s Thread stack.
     pub struct EmbassyThread<'a, T> {
         provider: T,
+        mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
         context: &'a OtNetContext,
         rand: Rand,
     }
@@ -372,6 +374,7 @@ pub mod thread {
         /// Create a new instance of the `EmbassyThread` type.
         pub fn new<E, M>(
             provider: T,
+            mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
             stack: &'a EmbassyWirelessMatterStack<'a, Thread<M>, OtNetContext, E>,
         ) -> Self
         where
@@ -380,15 +383,22 @@ pub mod thread {
         {
             Self::wrap(
                 provider,
+                mdns_services,
                 stack.network().embedding().embedding().net_context(),
                 stack.matter().rand(),
             )
         }
 
         /// Wrap the `EmbassyThread` type around a Thread driver provider and a network context.
-        pub const fn wrap(provider: T, context: &'a OtNetContext, rand: Rand) -> Self {
+        pub const fn wrap(
+            provider: T,
+            mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
+            context: &'a OtNetContext,
+            rand: Rand,
+        ) -> Self {
             Self {
                 provider,
+                mdns_services,
                 context,
                 rand,
             }
@@ -421,23 +431,30 @@ pub mod thread {
             .unwrap();
 
             let controller = OtController(ot);
-
             let netif = OtNetif::new(ot);
+            let mdns = OtMdns::new(ot, self.mdns_services).unwrap();
 
             let mut main = pin!(task.run(netif, ot, controller));
-            let mut run = pin!(async {
+            let mut radio = pin!(async {
                 ot.run(radio).await;
                 #[allow(unreachable_code)]
                 Ok(())
             });
+            let mut mdns = pin!(async {
+                mdns.run().await.unwrap(); // TODO
+                #[allow(unreachable_code)]
+                Ok(())
+            });
 
-            select(&mut main, &mut run).coalesce().await
+            select3(&mut main, &mut radio, &mut mdns).coalesce().await
         }
     }
 
     pub struct OtNetContext {
-        resources:
-            IfMutex<CriticalSectionRawMutex, (OtResources, MatterUdpResources, MatterSrpResources)>,
+        resources: IfMutex<
+            CriticalSectionRawMutex,
+            (OtResources, OtMatterUdpResources, OtMatterSrpResources),
+        >,
     }
 
     impl OtNetContext {
@@ -446,8 +463,8 @@ pub mod thread {
             Self {
                 resources: IfMutex::new((
                     OtResources::new(),
-                    MatterUdpResources::new(),
-                    MatterSrpResources::new(),
+                    OtMatterUdpResources::new(),
+                    OtMatterSrpResources::new(),
                 )),
             }
         }
@@ -458,8 +475,8 @@ pub mod thread {
                 // Note: below will break if `Ot*Resources` stop being a bunch of `MaybeUninit`s
                 resources <- IfMutex::init((
                     unsafe { MaybeUninit::<OtResources>::uninit().assume_init() },
-                    unsafe { MaybeUninit::<MatterUdpResources>::uninit().assume_init() },
-                    unsafe { MaybeUninit::<MatterSrpResources>::uninit().assume_init() },
+                    unsafe { MaybeUninit::<OtMatterUdpResources>::uninit().assume_init() },
+                    unsafe { MaybeUninit::<OtMatterSrpResources>::uninit().assume_init() },
                 )),
             })
         }
@@ -667,6 +684,7 @@ pub mod wifi {
     use embassy_futures::select::select;
 
     use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+
     use rs_matter_stack::matter::error::Error;
     use rs_matter_stack::matter::utils::init::{init, Init};
     use rs_matter_stack::matter::utils::rand::Rand;

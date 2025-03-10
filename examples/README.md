@@ -44,8 +44,8 @@ Upon successful commissioning, you should end up with a Light device which you c
 cd rp
 cargo +nightly build
 
-# Replace `light` with `light_eth` below to flash the Ethernet example
-probe-rs run --chip rp2040 target/thumbv6m-none-eabi/debug/light
+# Replace `light_wifi` with `light_eth` below to flash the Ethernet example
+probe-rs run --chip rp2040 target/thumbv6m-none-eabi/debug/light_wifi
 ```
 
 ### Espressif MCUs
@@ -54,7 +54,7 @@ probe-rs run --chip rp2040 target/thumbv6m-none-eabi/debug/light
 
 ```sh
 # Wifi credentials should be valid only if you plan to run the `light_eth` "ethernet" example.
-# The `light` example gets your Wifi settings from the Matter Controller automatically.
+# The `light_wifi` example gets your Wifi settings from the Matter Controller automatically.
 export WIFI_SSID=foo
 export WIFI_PASS=bar
 
@@ -64,16 +64,17 @@ espup update
 cd esp
 cargo +esp build --target xtensa-esp32-none-elf --no-default-features --features esp32
 
-# Replace `light` with `light_eth` below to flash the "Ethernet" example
-espflash flash target/xtensa-esp32-none-elf/debug/light --baud 1500000
-espflash monitor --elf target/xtensa-esp32-none-elf/debug/light
+# Replace `light_wifi` with `light_eth` below to flash the "Ethernet" example
+# Replace `light_wifi` with `light_thread` below to flash the Ethernet example (you'll need an esp32c6 or esp32h2)
+espflash flash target/xtensa-esp32-none-elf/debug/light_wifi --baud 1500000
+espflash monitor --elf target/xtensa-esp32-none-elf/debug/light_wifi
 ```
 
 #### esp32s3
 
 ```sh
 # Wifi credentials should be valid only if you plan to run the `light_eth` "ethernet" example.
-# The `light` example gets your Wifi settings from the Matter Controller automatically.
+# The `light_wifi` example gets your Wifi settings from the Matter Controller automatically.
 export WIFI_SSID=foo
 export WIFI_PASS=bar
 
@@ -83,39 +84,40 @@ espup update
 cd esp
 cargo +esp build --target xtensa-esp32s3-none-elf --no-default-features --features esp32s3
 
-# Replace `light` with `light_eth` below to flash the "Ethernet" example
-espflash flash target/xtensa-esp32s3-none-elf/debug/light --baud 1500000
-espflash monitor --elf target/xtensa-esp32s3-none-elf/debug/light
+# Replace `light_wifi` with `light_eth` below to flash the "Ethernet" example
+espflash flash target/xtensa-esp32s3-none-elf/debug/light_wifi --baud 1500000
+espflash monitor --elf target/xtensa-esp32s3-none-elf/debug/light_wifi
 ```
 
 #### esp32c3
 
 ```sh
 # Wifi credentials should be valid only if you plan to run the `light_eth` "ethernet" example.
-# The `light` example gets your Wifi settings from the Matter Controller automatically.
+# The `light_wifi` example gets your Wifi settings from the Matter Controller automatically.
 export WIFI_SSID=foo
 export WIFI_PASS=bar
 
 cd esp
 cargo +nightly build --target riscv32imc-unknown-none-elf --no-default-features --features esp32c3
 
-# Replace `light` with `light_eth` below to flash the "Ethernet" example
-espflash flash target/riscv32imc-unknown-none-elf/debug/light --baud 1500000
-espflash monitor --elf target/riscv32imc-unknown-none-elf/debug/light
+# Replace `light_wifi` with `light_eth` below to flash the "Ethernet" example
+espflash flash target/riscv32imc-unknown-none-elf/debug/light_wifi --baud 1500000
+espflash monitor --elf target/riscv32imc-unknown-none-elf/debug/light_wifi
 ```
 
 #### esp32c6
 
 ```sh
 # Wifi credentials should be valid only if you plan to run the `light_eth` "ethernet" example.
-# The `light` example gets your Wifi settings from the Matter Controller automatically.
+# The `light_wifi` example gets your Wifi settings from the Matter Controller automatically.
 export WIFI_SSID=foo
 export WIFI_PASS=bar
 
 cd esp
 cargo +nightly build --target riscv32imac-unknown-none-elf --no-default-features --features esp32c6
 
-# Replace `light` with `light_eth` below to flash the "Ethernet" example
-espflash flash target/riscv32imac-unknown-none-elf/debug/light --baud 1500000
-espflash monitor --elf target/riscv32imac-unknown-none-elf/debug/light
+# Replace `light_wifi` with `light_eth` below to flash the "Ethernet" example
+# Replace `light_wifi` with `light_thread` below to flash the Ethernet example (you'll need an esp32c6 or esp32h2)
+espflash flash target/riscv32imac-unknown-none-elf/debug/light_wifi --baud 1500000
+espflash monitor --elf target/riscv32imac-unknown-none-elf/debug/light_wifi
 ```

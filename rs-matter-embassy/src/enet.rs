@@ -66,7 +66,7 @@ pub struct EnetNetif<'d> {
 
 impl<'d> EnetNetif<'d> {
     /// Create a new `EmbassyNetif` instance
-    pub fn new(stack: Stack<'d>) -> Self {
+    pub const fn new(stack: Stack<'d>) -> Self {
         Self {
             stack,
             up: Mutex::new(Cell::new(false)),

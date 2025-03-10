@@ -2,11 +2,9 @@
 //!
 //! As the name suggests, this Matter stack assembly uses Thread as the main transport,
 //! and thus BLE for commissioning, in non-concurrent commissioning mode
-//! (the IEEE802154 radio and BLE do not run at the same time).
+//! (the IEEE802154 radio and BLE cannot not run at the same time yet with `esp-hal`).
 //!
 //! If you want to use Ethernet, utilize `EmbassyEthMatterStack` instead.
-//! If you want to use non-concurrent commissioning, utilize `EmbassyThreadNCMatterStack` instead
-//! (Note: Alexa does not work (yet) with non-concurrent commissioning.)
 //!
 //! The example implements a fictitious Light device (an On-Off Matter cluster).
 #![no_std]
@@ -33,7 +31,9 @@ use rs_matter_embassy::matter::data_model::objects::{Dataver, Endpoint, HandlerC
 use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
+use rs_matter_embassy::matter::MATTER_PORT;
 use rs_matter_embassy::rand::esp::{esp_init_rand, esp_rand};
+use rs_matter_embassy::stack::mdns::MatterMdnsServices;
 use rs_matter_embassy::stack::persist::DummyPersist;
 use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
@@ -91,29 +91,26 @@ async fn main(_s: Spawner) {
     }
 
     // == Step 2: ==
+    // Replace the built-in Matter mDNS responder with a bridge that delegates
+    // all mDNS work to the OpenThread SRP client.
+    // Thread is not friendly to IpV6 multicast, so we have to use SRP instead.
+    let mdns_services = &*Box::leak(Box::new_uninit())
+        .init_with(MatterMdnsServices::init(&TEST_BASIC_INFO, MATTER_PORT));
+
+    // == Step 3: ==
     // Allocate the Matter stack.
     // For MCUs, it is best to allocate it statically, so as to avoid program stack blowups (its memory footprint is ~ 35 to 50KB).
     // It is also (currently) a mandatory requirement when the wireless stack variation is used.
     let stack = &*Box::leak(Box::new_uninit()).init_with(EmbassyThreadNCMatterStack::<()>::init(
-        &BasicInfoConfig {
-            vid: TEST_VID,
-            pid: TEST_PID,
-            hw_ver: 2,
-            sw_ver: 1,
-            sw_ver_str: "1",
-            serial_no: "aabbccdd",
-            device_name: "MyLight",
-            product_name: "ACME Light",
-            vendor_name: "ACME",
-        },
+        &TEST_BASIC_INFO,
         TEST_BASIC_COMM_DATA,
         &TEST_DEV_ATT,
-        MdnsType::Builtin,
+        MdnsType::Provided(mdns_services),
         epoch,
         esp_rand,
     ));
 
-    // == Step 3: ==
+    // == Step 4: ==
     // Our "light" on-off cluster.
     // Can be anything implementing `rs_matter::data_model::AsyncHandler`
     let on_off = cluster_on_off::OnOffCluster::new(Dataver::new_rand(stack.matter().rand()));
@@ -138,7 +135,7 @@ async fn main(_s: Spawner) {
             ))),
         );
 
-    // == Step 4: ==
+    // == Step 5: ==
     // Run the Matter stack with our handler
     // Using `pin!` is completely optional, but saves some memory due to `rustc`
     // not being very intelligent w.r.t. stack usage in async functions
@@ -148,6 +145,7 @@ async fn main(_s: Spawner) {
         // The Matter stack needs to instantiate an `openthread` Radio
         EmbassyThread::new(
             EspThreadRadioProvider::new(peripherals.IEEE802154, radio_clk_ieee802154),
+            mdns_services,
             stack
         ),
         // The Matter stack needs BLE
@@ -186,6 +184,20 @@ async fn main(_s: Spawner) {
     // Schedule the Matter run & the device loop together
     select(&mut matter, &mut device).coalesce().await.unwrap();
 }
+
+/// Basic info about our device
+/// Both the matter stack as well as out mDNS-to-SRP bridge need this, hence extracted out
+const TEST_BASIC_INFO: BasicInfoConfig = BasicInfoConfig {
+    vid: TEST_VID,
+    pid: TEST_PID,
+    hw_ver: 2,
+    sw_ver: 1,
+    sw_ver_str: "1",
+    serial_no: "aabbccdd",
+    device_name: "MyLight",
+    product_name: "ACME Light",
+    vendor_name: "ACME",
+};
 
 /// Endpoint 0 (the root endpoint) always runs
 /// the hidden Matter system clusters, so we pick ID=1
