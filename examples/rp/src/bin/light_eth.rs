@@ -34,6 +34,9 @@ use panic_probe as _;
 
 use rand_core::RngCore;
 
+use rs_matter_embassy::enet::{
+    create_enet_stack, EnetMatterStackResources, EnetMatterUdpBuffers, EnetNetif, Udp,
+};
 use rs_matter_embassy::epoch::epoch;
 use rs_matter_embassy::matter::data_model::cluster_basic_information::BasicInfoConfig;
 use rs_matter_embassy::matter::data_model::cluster_on_off;
@@ -42,8 +45,6 @@ use rs_matter_embassy::matter::data_model::objects::{Dataver, Endpoint, HandlerC
 use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
-use rs_matter_embassy::nal::{create_net_stack, MatterStackResources, MatterUdpBuffers, Udp};
-use rs_matter_embassy::netif::EmbassyNetif;
 use rs_matter_embassy::rand::rp::rp_rand;
 use rs_matter_embassy::stack::persist::DummyPersist;
 use rs_matter_embassy::stack::test_device::{
@@ -126,8 +127,8 @@ async fn main(spawner: Spawner) {
 
     spawner.spawn(ethernet_task(runner)).unwrap();
 
-    let (net_stack, mut net_runner) = create_net_stack(device, RoscRng.next_u64(), unsafe {
-        mk_static!(MatterStackResources).assume_init_mut()
+    let (net_stack, mut net_runner) = create_enet_stack(device, RoscRng.next_u64(), unsafe {
+        mk_static!(EnetMatterStackResources).assume_init_mut()
     });
     let mut net_runner = pin!(async {
         net_runner.run().await;
@@ -191,11 +192,11 @@ async fn main(spawner: Spawner) {
     // This step can be repeated in that the stack can be stopped and started multiple times, as needed.
     let mut matter = pin!(stack.run(
         // The Matter stack needs access to the netif so as to detect network going up/down
-        EmbassyNetif::new(net_stack),
+        EnetNetif::new(net_stack),
         // The Matter stack needs to open two UDP sockets
         Udp::new(
             net_stack,
-            &*mk_static!(MatterUdpBuffers, MatterUdpBuffers::new()),
+            &*mk_static!(EnetMatterUdpBuffers, EnetMatterUdpBuffers::new()),
         ),
         // The Matter stack needs a persister to store its state
         // `EmbassyPersist`+`EmbassyKvBlobStore` saves to a user-supplied NOR Flash region

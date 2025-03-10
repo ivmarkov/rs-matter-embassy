@@ -264,6 +264,7 @@ pub mod esp {
 }
 
 // Thread: Type aliases and state structs for an Embassy Matter stack running over a Thread network and BLE.
+#[cfg(feature = "openthread")]
 pub mod thread {
     use core::mem::MaybeUninit;
     use core::pin::pin;
@@ -480,7 +481,7 @@ pub mod thread {
 
     struct OtController<'a>(OpenThread<'a>);
 
-    impl<'a> Controller for OtController<'a> {
+    impl Controller for OtController<'_> {
         type Data = ThreadData;
 
         async fn scan<F>(
@@ -656,6 +657,7 @@ pub mod thread {
 }
 
 // Wifi: Type aliases and state structs for an Embassy Matter stack running over a Wifi network and BLE.
+#[cfg(feature = "embassy-net")]
 pub mod wifi {
     use core::mem::MaybeUninit;
     use core::pin::pin;
@@ -675,8 +677,9 @@ pub mod wifi {
         ConcurrencyMode, Controller, Wifi, WifiData, Wireless, WirelessTask, NC,
     };
 
-    use crate::nal::{create_enet_stack, EnetMatterStackResources, EnetMatterUdpBuffers};
-    use crate::netif::EnetNetif;
+    use crate::enet::{
+        create_enet_stack, EnetMatterStackResources, EnetMatterUdpBuffers, EnetNetif,
+    };
 
     use super::EmbassyWirelessMatterStack;
 
@@ -812,7 +815,8 @@ pub mod wifi {
             let mut seed = [0; core::mem::size_of::<u64>()];
             (self.rand)(&mut seed);
 
-            let (stack, mut runner) = create_enet_stack(driver, u64::from_le_bytes(seed), resources);
+            let (stack, mut runner) =
+                create_enet_stack(driver, u64::from_le_bytes(seed), resources);
 
             let netif = EnetNetif::new(stack);
             let udp = Udp::new(stack, buffers);

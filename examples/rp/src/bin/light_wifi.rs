@@ -34,6 +34,11 @@ use panic_probe as _;
 
 use log::info;
 
+use rs_matter_embassy::enet::net::driver::{Driver as _, HardwareAddress as DriverHardwareAddress};
+use rs_matter_embassy::enet::{
+    create_link_local_ipv6, multicast_mac_for_link_local_ipv6, MDNS_MULTICAST_MAC_IPV4,
+    MDNS_MULTICAST_MAC_IPV6,
+};
 use rs_matter_embassy::epoch::epoch;
 use rs_matter_embassy::matter::data_model::cluster_basic_information::BasicInfoConfig;
 use rs_matter_embassy::matter::data_model::cluster_on_off;
@@ -42,11 +47,6 @@ use rs_matter_embassy::matter::data_model::objects::{Dataver, Endpoint, HandlerC
 use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
-use rs_matter_embassy::nal::net::driver::{Driver as _, HardwareAddress};
-use rs_matter_embassy::nal::{
-    create_link_local_ipv6, multicast_mac_for_link_local_ipv6, MDNS_MULTICAST_MAC_IPV4,
-    MDNS_MULTICAST_MAC_IPV6,
-};
 use rs_matter_embassy::rand::rp::rp_rand;
 use rs_matter_embassy::stack::persist::DummyPersist;
 use rs_matter_embassy::stack::test_device::{
@@ -151,7 +151,7 @@ async fn main(spawner: Spawner) {
     // cyw43 is a bit special in that it needs to have allowlisted all multicast MAC addresses
     // it should listen on. Therefore, add the mDNS ipv4 and ipv6 multicast MACs to the list,
     // as well as the ipv6 neightbour solicitation requests' MAC.
-    let HardwareAddress::Ethernet(mac) = net_device.hardware_address() else {
+    let DriverHardwareAddress::Ethernet(mac) = net_device.hardware_address() else {
         unreachable!()
     };
     control

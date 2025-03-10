@@ -21,13 +21,33 @@ harness = false
 #rs-matter-stack = { path = "../../../rs-matter-stack" }
 #[patch.'https://github.com/embassy-rs/trouble']
 #trouble-host = { version = "0.1", path = "../../../trouble/host" }
-[patch.'https://github.com/ivmarkov/esp-openthread']
-openthread = { version = "0.1", path = "../../../esp-openthread/openthread" }
+#[patch.'https://github.com/ivmarkov/esp-openthread']
+#openthread = { version = "0.1", path = "../../../esp-openthread/openthread" }
 
 [patch.crates-io]
 #rs-matter = { git = "https://github.com/project-chip/rs-matter" }
 rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "next" }
 #rs-matter = { path = "../../../rs-matter/rs-matter" }
+
+[profile.dev]
+# Rust debug is too slow.
+# For debug builds always builds with some optimization
+opt-level = "z"
+
+[profile.release]
+codegen-units = 1 # LLVM can perform better optimizations using a single thread
+debug = 2
+debug-assertions = false
+opt-level = "s"
+overflow-checks = false
+
+[features]
+default = ["esp32c6"]
+esp32 = ["esp-hal/esp32", "esp-backtrace/esp32", "esp-hal-embassy/esp32", "esp-println/esp32", "esp-wifi/esp32", "portable-atomic/critical-section"]
+esp32c2 = ["esp-hal/esp32c2", "esp-backtrace/esp32c2", "esp-hal-embassy/esp32c2", "esp-println/esp32c2", "esp-wifi/esp32c2", "portable-atomic/critical-section"]
+esp32c3 = ["esp-hal/esp32c3", "esp-backtrace/esp32c3", "esp-hal-embassy/esp32c3", "esp-println/esp32c3", "esp-wifi/esp32c3", "portable-atomic/unsafe-assume-single-core"]
+esp32c6 = ["esp-ieee802154/esp32c6", "esp-hal/esp32c6", "esp-backtrace/esp32c6", "esp-hal-embassy/esp32c6", "esp-println/esp32c6", "esp-wifi/esp32c6", "portable-atomic/critical-section"]
+esp32s3 = ["esp-hal/esp32s3", "esp-backtrace/esp32s3", "esp-hal-embassy/esp32s3", "esp-println/esp32s3", "esp-wifi/esp32s3", "portable-atomic/critical-section"]
 
 [dependencies]
 log = "0.4"
@@ -41,29 +61,9 @@ esp-wifi = { version = "0.12.0", features = ["wifi", "ble"] }
 esp-ieee802154 = { version = "0.5", optional = true }
 bt-hci = { version = "0.2" }
 heapless = "0.8"
-rs-matter-embassy = { path = "../../rs-matter-embassy", features = ["esp"] }
+rs-matter-embassy = { path = "../../rs-matter-embassy", features = ["esp", "embassy-net", "openthread"] }
 embassy-sync = "0.6"
 embassy-futures = "0.1"
 embassy-time = "0.4"
 static_cell = "2"
 portable-atomic = "1"
-
-[features]
-default = ["esp32c6"]
-esp32 = ["esp-hal/esp32", "esp-backtrace/esp32", "esp-hal-embassy/esp32", "esp-println/esp32", "esp-wifi/esp32", "portable-atomic/critical-section"]
-esp32c2 = ["esp-hal/esp32c2", "esp-backtrace/esp32c2", "esp-hal-embassy/esp32c2", "esp-println/esp32c2", "esp-wifi/esp32c2", "portable-atomic/critical-section"]
-esp32c3 = ["esp-hal/esp32c3", "esp-backtrace/esp32c3", "esp-hal-embassy/esp32c3", "esp-println/esp32c3", "esp-wifi/esp32c3", "portable-atomic/unsafe-assume-single-core"]
-esp32c6 = ["esp-ieee802154/esp32c6", "esp-hal/esp32c6", "esp-backtrace/esp32c6", "esp-hal-embassy/esp32c6", "esp-println/esp32c6", "esp-wifi/esp32c6", "portable-atomic/critical-section"]
-esp32s3 = ["esp-hal/esp32s3", "esp-backtrace/esp32s3", "esp-hal-embassy/esp32s3", "esp-println/esp32s3", "esp-wifi/esp32s3", "portable-atomic/critical-section"]
-
-[profile.dev]
-# Rust debug is too slow.
-# For debug builds always builds with some optimization
-opt-level = "z"
-
-[profile.release]
-codegen-units = 1 # LLVM can perform better optimizations using a single thread
-debug = 2
-debug-assertions = false
-opt-level = "s"
-overflow-checks = false

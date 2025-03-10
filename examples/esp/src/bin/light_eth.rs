@@ -27,6 +27,9 @@ use esp_wifi::wifi::{
 
 use log::info;
 
+use rs_matter_embassy::enet::{
+    create_enet_stack, EnetMatterStackResources, EnetMatterUdpBuffers, EnetNetif, Udp,
+};
 use rs_matter_embassy::epoch::epoch;
 use rs_matter_embassy::matter::data_model::cluster_basic_information::BasicInfoConfig;
 use rs_matter_embassy::matter::data_model::cluster_on_off;
@@ -35,10 +38,6 @@ use rs_matter_embassy::matter::data_model::objects::{Dataver, Endpoint, HandlerC
 use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
-use rs_matter_embassy::nal::{
-    create_enet_stack, EnetMatterStackResources, EnetMatterUdpBuffers, Udp,
-};
-use rs_matter_embassy::netif::EnetNetif;
 use rs_matter_embassy::rand::esp::{esp_init_rand, esp_rand};
 use rs_matter_embassy::stack::persist::DummyPersist;
 use rs_matter_embassy::stack::test_device::{
