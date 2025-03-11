@@ -44,6 +44,8 @@ use rs_matter_embassy::wireless::thread::esp::EspThreadRadioProvider;
 use rs_matter_embassy::wireless::thread::{EmbassyThread, EmbassyThreadNCMatterStack};
 use rs_matter_embassy::wireless::EmbassyBle;
 
+use tinyrlibc as _;
+
 extern crate alloc;
 
 #[esp_hal_embassy::main]
