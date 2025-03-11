@@ -9,7 +9,7 @@
 
 Everything necessary to run [`rs-matter`](https://github.com/project-chip/rs-matter) with Embassy:
 * Implementation of `rs-matter`'s `GattPeripheral` for BLE comissioning support based on [`trouble`](https://github.com/embassy-rs/trouble).
-* [`rs-matter-stack`](https://github.com/ivmarkov/rs-matter-stack) support with `Netif`, `Ble`, `Wireless` and `KvBlobStore` implementations.
+* [`rs-matter-stack`](https://github.com/ivmarkov/rs-matter-stack) support with `Netif`, `Ble`, `Wireless` (with Wifi and **soon Thread!**) and `KvBlobStore` implementations.
 
 ## Example
 
@@ -69,7 +69,7 @@ async fn main(_s: Spawner) {
 
     info!("Starting...");
 
-    // Heap strictly necessary only for Wifi and for the only Matter dependency which needs (~4KB) alloc - `x509`
+    // Heap strictly necessary only for Wifi+BLE and for the only Matter dependency which needs (~4KB) alloc - `x509`
     // However since `esp32` specifically has a disjoint heap which causes bss size troubles, it is easier
     // to allocate the statics once from heap as well
     init_heap();
