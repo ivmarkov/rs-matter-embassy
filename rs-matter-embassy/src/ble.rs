@@ -586,77 +586,72 @@ where
     }
 }
 
-
 #[cfg(feature = "nrf")]
 pub mod nrf {
+    use core::future::Future;
 
-use core::future::Future;
+    use bt_hci::transport::WithIndicator;
+    use bt_hci::ControllerToHostPacket;
+    use bt_hci::HostToControllerPacket;
+    use bt_hci::WriteHci;
 
-use nrf_sdc::SoftdeviceController;
+    use embedded_io::{Error, ErrorType};
 
-use bt_hci::ControllerToHostPacket;
-use bt_hci::HostToControllerPacket;
-use bt_hci::transport::WithIndicator;
-use bt_hci::WriteHci;
+    use nrf_sdc::SoftdeviceController;
 
-use embedded_io::{Error, ErrorType};
+    // TODO: I hope none of this wrapping would be necessary, as `trouble-host`'s NRF examples
+    // do not do this
+    pub struct SoftdeviceExternalController<'d>(pub SoftdeviceController<'d>);
 
-// struct MyType(FooType);
-// 
-// impl BarTrait for MyType {
-//     fn bar(&self) {
-//         // use `self.0` here
-//     }
-// }
+    impl<'d> bt_hci::transport::Transport for SoftdeviceExternalController<'d> {
+        fn read<'a>(
+            &self,
+            buf: &'a mut [u8],
+        ) -> impl Future<Output = Result<ControllerToHostPacket<'a>, Self::Error>> {
+            async {
+                let kind = self.0.hci_get(buf).await.unwrap(); // TODO
+                bt_hci::ControllerToHostPacket::from_hci_bytes_with_kind(kind, buf)
+                    .map(|(x, _)| x)
+                    .map_err(|err| match err {
+                        bt_hci::FromHciBytesError::InvalidSize => {
+                            SoftdeviceExternalControllerError::Unknown
+                        }
+                        bt_hci::FromHciBytesError::InvalidValue => {
+                            SoftdeviceExternalControllerError::Unknown
+                        }
+                    })
+            }
+        }
 
-pub struct SoftdeviceExternalController<'d>(pub SoftdeviceController<'d>);
+        /// Write a complete HCI packet from the tx buffer
+        fn write<T: HostToControllerPacket>(
+            &self,
+            val: &T,
+        ) -> impl Future<Output = Result<(), Self::Error>> {
+            async {
+                let buf: [u8; 259] = [0; 259];
+                let w = WithIndicator::new(val);
+                let len = w.size();
 
-// impl<'d> SoftdeviceExternalController<'d> {
-//     pub fn new() -> Self {
-//         //..
-//     }
-// }
-
-impl<'d> bt_hci::transport::Transport for SoftdeviceExternalController<'d> {
-    fn read<'a>(&self, buf: &'a mut [u8]) -> impl Future<Output = Result<ControllerToHostPacket<'a>, Self::Error>> {
-        async {
-            let kind = self.0.hci_get(buf).await.unwrap();// ?;
-            bt_hci::ControllerToHostPacket::from_hci_bytes_with_kind(kind, buf)
-                .map(|(x, _)| x)
-                .map_err(|err| match err {
-                    bt_hci::FromHciBytesError::InvalidSize => SoftdeviceExternalControllerError::Unknown,
-                    bt_hci::FromHciBytesError::InvalidValue => SoftdeviceExternalControllerError::Unknown,
-                })
+                self.0
+                    .hci_data_put(&buf[..len])
+                    .map_err(|_| SoftdeviceExternalControllerError::Unknown)
+            }
         }
     }
 
-    /// Write a complete HCI packet from the tx buffer
-    fn write<T: HostToControllerPacket>(&self, val: &T) -> impl Future<Output = Result<(), Self::Error>> {
-        async {
-            let buf: [u8; 259] = [0; 259];
-            let w = WithIndicator::new(val);
-            let len = w.size();
+    #[derive(Debug)]
+    pub enum SoftdeviceExternalControllerError {
+        Unknown,
+    }
 
-            self.0.hci_data_put(&buf[..len])
-                .map_err(|err| match err {
-                    _Error => SoftdeviceExternalControllerError::Unknown
-                })
+    impl Error for SoftdeviceExternalControllerError {
+        fn kind(&self) -> embedded_io::ErrorKind {
+            embedded_io::ErrorKind::Other
         }
     }
-}
 
-#[derive(Debug)]
-pub enum SoftdeviceExternalControllerError {
-    Unknown,
-}
-
-impl Error for SoftdeviceExternalControllerError {
-    fn kind(&self) -> embedded_io::ErrorKind {
-        embedded_io::ErrorKind::Other
+    impl ErrorType for SoftdeviceExternalController<'_> {
+        type Error = SoftdeviceExternalControllerError;
     }
-}
-
-impl ErrorType for SoftdeviceExternalController<'_> {
-    type Error = SoftdeviceExternalControllerError;
-}
 }

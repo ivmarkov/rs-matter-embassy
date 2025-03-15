@@ -5,25 +5,37 @@ edition = "2021"
 resolver = "2"
 
 [[bin]]
-name = "light"
+name = "light_thread"
 harness = false
 
-# [[bin]]
-# name = "light_eth"
-# harness = false
+#[[bin]]
+#name = "light_eth"
+#harness = false
+
+[profile.dev]
+opt-level = "z"
+
+[profile.release]
+opt-level = "z"
+debug = 2
 
 #[patch.'https://github.com/ivmarkov/rs-matter-stack']
 #rs-matter-stack = { path = "../../../rs-matter-stack" }
+#[patch.'https://github.com/embassy-rs/trouble']
+#trouble-host = { version = "0.1", path = "../../../trouble/host" }
+#[patch.'https://github.com/ivmarkov/esp-openthread']
+#openthread = { version = "0.1", path = "../../../esp-openthread/openthread" }
 
 [patch.crates-io]
 #rs-matter = { git = "https://github.com/project-chip/rs-matter" }
-rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "pase-breaks-provisioning" }
+rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "next" }
 #rs-matter = { path = "../../../rs-matter/rs-matter" }
+nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "551a95436e999b4290b4a33383aa3d6747b63dd9" }
+nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "551a95436e999b4290b4a33383aa3d6747b63dd9" }
 
 [dependencies]
 embassy-executor = { version = "0.7", default-features = false, features = ["task-arena-size-98304", "arch-cortex-m", "executor-thread", "log"] }
 embassy-time = { version = "0.4", default-features = false, features = ["log"] }
-# embassy-time = { version = "0.4", default-features = false, features = ["log", "defmt", "defmt-timestamp-uptime"] }
 embassy-nrf = { version = "0.3.1", features = ["log", "time-driver-rtc1", "time", "nrf52840"], default-features = false }
 embassy-futures = "0.1.1"
 embassy-sync = { version = "0.6", features = ["log"] }
@@ -36,22 +48,11 @@ cortex-m = { version = "0.7.6" }
 cortex-m-rt = "0.7.0"
 
 rtt-target = { version = "0.6", features = ["log"] }
-panic-probe = { version = "0.3", features = ["print-rtt"] }
+panic-rtt-target = "0.2"
 
 static_cell = "2"
 portable-atomic = { version = "1.5", features = ["critical-section"] }
 
-nrf-sdc = {  git = "https://github.com/alexmoon/nrf-sdc.git", rev = "551a95436e999b4290b4a33383aa3d6747b63dd9", version = "0.1.0", default-features = false, features = ["nrf52840", "peripheral", "central"] }
-nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "551a95436e999b4290b4a33383aa3d6747b63dd9", version = "0.1.0", default-features = false, features = ["critical-section-impl"] }
+nrf-sdc = { version = "0.1.0", default-features = false, features = ["peripheral"] }
+nrf-mpsl = { version = "0.1.0", default-features = false, features = ["critical-section-impl"] }
 bt-hci = { version = "0.2", default-features = false}
-
-# defmt = "0.3"
-# defmt-rtt = "0.4"
-
-[profile.dev]
-debug = true
-opt-level = "z"
-
-[profile.release]
-opt-level = "z"
-debug = 2
