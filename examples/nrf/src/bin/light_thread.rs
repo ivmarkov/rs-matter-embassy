@@ -12,13 +12,14 @@ use core::mem::MaybeUninit;
 use core::pin::pin;
 use core::ptr::addr_of_mut;
 
+use embassy_nrf::interrupt;
+use embassy_nrf::interrupt::{InterruptExt, Priority};
 use embassy_nrf::peripherals::RNG;
 use embassy_nrf::{bind_interrupts, rng};
 
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-
-use embassy_executor::Spawner;
+use embassy_executor::{InterruptExecutor, Spawner};
 use embassy_futures::select::select;
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::{Duration, Timer};
 
 use embedded_alloc::LlffHeap;
@@ -42,7 +43,9 @@ use rs_matter_embassy::stack::test_device::{
 };
 use rs_matter_embassy::stack::MdnsType;
 use rs_matter_embassy::wireless::nrf::NrfBleController;
-use rs_matter_embassy::wireless::thread::nrf::{NrfThreadRadio, NrfThreadRadioInterruptHandler};
+use rs_matter_embassy::wireless::thread::nrf::{
+    NrfThreadRadio, NrfThreadRadioInterruptHandler, NrfThreadRadioResources, NrfThreadRadioRunner,
+};
 use rs_matter_embassy::wireless::thread::{EmbassyThread, EmbassyThreadNCMatterStack};
 use rs_matter_embassy::wireless::EmbassyBle;
 
@@ -73,6 +76,13 @@ bind_interrupts!(struct Irqs {
     TIMER0 => rs_matter_embassy::wireless::nrf::NrfBleHighPrioInterruptHandler;
     RTC0 => rs_matter_embassy::wireless::nrf::NrfBleHighPrioInterruptHandler;
 });
+
+#[interrupt]
+unsafe fn EGU1_SWI1() {
+    RADIO_EXECUTOR.on_interrupt()
+}
+
+static RADIO_EXECUTOR: InterruptExecutor = InterruptExecutor::new();
 
 #[global_allocator]
 static HEAP: LlffHeap = LlffHeap::empty();
@@ -155,7 +165,22 @@ async fn main(_s: Spawner) {
     );
 
     // TODO: Share the radio peripheral between the BLE and Thread stacks
-    let nrf_radio = NrfThreadRadio::new(unsafe { embassy_nrf::peripherals::RADIO::steal() }, Irqs);
+    let (nrf_radio, nrf_radio_runner) = NrfThreadRadio::new(
+        mk_static!(NrfThreadRadioResources, NrfThreadRadioResources::new()),
+        unsafe { embassy_nrf::peripherals::RADIO::steal() },
+        Irqs,
+    );
+
+    // High-priority executor: EGU1_SWI1, priority level 6
+    interrupt::EGU1_SWI1.set_priority(Priority::P6);
+
+    // The NRF radio needs to run in a high priority executor
+    // because it is lacking hardware MAC-filtering and ACK caps,
+    // hence these are emulated in software, so low latency is crucial
+    RADIO_EXECUTOR
+        .start(interrupt::EGU1_SWI1)
+        .spawn(run_radio(nrf_radio_runner))
+        .unwrap();
 
     // == Step 4: ==
     // Our "light" on-off cluster.
@@ -189,7 +214,7 @@ async fn main(_s: Spawner) {
     //
     // This step can be repeated in that the stack can be stopped and started multiple times, as needed.
     let mut matter = pin!(stack.run(
-        // The Matter stack needs to instantiate an `embassy-net` `Driver` and `Controller`
+        // The Matter stack needs to instantiate `openthread`
         EmbassyThread::new(nrf_radio, mdns_services, stack),
         // The Matter stack needs BLE
         EmbassyBle::new(nrf_ble_controller, stack),
@@ -258,3 +283,8 @@ const NODE: Node = Node {
         },
     ],
 };
+
+#[embassy_executor::task]
+async fn run_radio(mut runner: NrfThreadRadioRunner<'static, 'static>) -> ! {
+    runner.run().await
+}

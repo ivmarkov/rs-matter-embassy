@@ -493,7 +493,7 @@ pub mod nrf {
             >(mpsl_p, NrfBleControllerInterrupts, lfclk_cfg)
             .map_err(to_matter_err)?;
 
-            // TODO
+            // TODO: Externalize as resources
             let mut sdc_mem = nrf_sdc::Mem::<3312>::new();
 
             let mut rng = MatterRngCore::new(self.rand);
@@ -953,8 +953,11 @@ pub mod thread {
 
         use openthread::nrf::Ieee802154Peripheral;
         use openthread::nrf::NrfRadio;
+        use openthread::{PhyRadioRunner, ProxyRadio, ProxyRadioResources, Radio};
 
         use rs_matter_stack::matter::error::Error;
+
+        pub use openthread::ProxyRadioResources as NrfThreadRadioResources;
 
         pub struct NrfThreadRadioInterruptHandler;
 
@@ -980,35 +983,72 @@ pub mod thread {
         {
         }
 
-        /// A `ThreadRadio` implementation for the NRF52 family of chips.
-        pub struct NrfThreadRadio<'d, I> {
+        /// A runner for the NRF52 PHY radio
+        /// Needs to run in a high-prio execution context
+        pub struct NrfThreadRadioRunner<'a, 'd> {
+            runner: PhyRadioRunner<'a>,
             radio_peripheral: PeripheralRef<'d, embassy_nrf::peripherals::RADIO>,
-            _irq: I,
         }
 
-        impl<'d, I> NrfThreadRadio<'d, I> {
-            /// Create a new instance of the `EspThreadRadioDriverProvider` type.
-            ///
-            /// # Arguments
-            /// - `peripheral` - The Thread radio peripheral instance.
-            pub fn new(
+        impl<'a, 'd> NrfThreadRadioRunner<'a, 'd> {
+            fn new(
+                runner: PhyRadioRunner<'a>,
                 radio_peripheral: impl Peripheral<P = embassy_nrf::peripherals::RADIO> + 'd,
-                irq: I,
             ) -> Self {
                 Self {
+                    runner,
                     radio_peripheral: radio_peripheral.into_ref(),
-                    _irq: irq,
                 }
+            }
+
+            /// Run the PHY radio
+            pub async fn run(&mut self) -> ! {
+                let radio = NrfRadio::new(embassy_nrf::radio::ieee802154::Radio::new(
+                    &mut self.radio_peripheral,
+                    NrfThreadRadioInterrupts,
+                ));
+
+                self.runner.run(radio, embassy_time::Delay).await
             }
         }
 
-        impl<I> super::ThreadRadio for NrfThreadRadio<'_, I>
-        where
-            I: Binding<
-                <embassy_nrf::peripherals::RADIO as Ieee802154Peripheral>::Interrupt,
-                NrfThreadRadioInterruptHandler,
-            >,
-        {
+        /// A `ThreadRadio` implementation for the NRF52 family of chips.
+        pub struct NrfThreadRadio<'a>(ProxyRadio<'a>);
+
+        impl<'a> NrfThreadRadio<'a> {
+            /// Create a new instance of the `NrfThreadRadio` type.
+            ///
+            /// # Arguments
+            /// - `resources` - The resources for the radio proxying
+            /// - `radio_peripheral` - The radio peripheral instance
+            /// - `irq` - The radio interrupt binding
+            pub fn new<'d, I>(
+                resources: &'a mut ProxyRadioResources,
+                mut radio_peripheral: impl Peripheral<P = embassy_nrf::peripherals::RADIO> + 'd,
+                _irq: I,
+            ) -> (Self, NrfThreadRadioRunner<'a, 'd>)
+            where
+                I: Binding<
+                    <embassy_nrf::peripherals::RADIO as Ieee802154Peripheral>::Interrupt,
+                    NrfThreadRadioInterruptHandler,
+                >,
+            {
+                // TODO: A bit dirty as we create it and then drop it immediately
+                let caps = NrfRadio::new(embassy_nrf::radio::ieee802154::Radio::new(
+                    &mut radio_peripheral,
+                    NrfThreadRadioInterrupts,
+                ))
+                .caps();
+
+                let (proxy, proxy_runner) = ProxyRadio::new(caps, resources);
+
+                let runner = NrfThreadRadioRunner::new(proxy_runner, radio_peripheral);
+
+                (Self(proxy), runner)
+            }
+        }
+
+        impl super::ThreadRadio for NrfThreadRadio<'_> {
             async fn run<A>(&mut self, mut task: A) -> Result<(), Error>
             where
                 A: super::ThreadRadioTask,
@@ -1017,11 +1057,7 @@ pub mod thread {
 
                 IEEE802154_ENABLED.lock(|s| s.set(true));
 
-                task.run(NrfRadio::new(embassy_nrf::radio::ieee802154::Radio::new(
-                    &mut self.radio_peripheral,
-                    NrfThreadRadioInterrupts,
-                )))
-                .await
+                task.run(&mut self.0).await
             }
         }
     }
