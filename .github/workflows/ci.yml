@@ -72,3 +72,12 @@ jobs:
 
       - name: Examples-RP-Build | Compile
         run: cd examples/rp; cargo build
+
+      - name: Examples-NRF-Build | Fmt Check
+        run: cd examples/nrf; cargo fmt -- --check
+
+      - name: Examples-NRF-Build | Clippy
+        run: cd examples/nrf; cargo clippy --no-deps -- -Dwarnings
+
+      - name: Examples-NRF-Build | Compile
+        run: cd examples/nrf; cargo build
