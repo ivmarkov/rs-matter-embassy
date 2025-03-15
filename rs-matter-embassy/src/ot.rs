@@ -40,24 +40,38 @@ impl<'d> OtNetif<'d> {
     }
 
     fn get_conf(&self) -> Option<NetifConf> {
-        let mut ipv6 = Ipv6Addr::UNSPECIFIED;
+        let status = self.0.net_status();
 
-        let _ = self.0.ipv6_addrs(|addr| {
-            if let Some((addr, _)) = addr {
-                ipv6 = addr;
-            }
+        if status.ip6_enabled && status.role.is_connected() {
+            let mut ipv6 = Ipv6Addr::UNSPECIFIED;
 
-            Ok(())
-        });
+            let _ = self.0.ipv6_addrs(|addr| {
+                if let Some((addr, _)) = addr {
+                    if ipv6.is_unspecified()
+                        || ipv6.is_unicast_link_local()
+                        || ipv6.is_unique_local()
+                            && !addr.is_unicast_link_local()
+                            && !addr.is_unique_local()
+                    {
+                        // Do not prefer link-local and unique-local addresses as they are not addressable in the Thread mesh
+                        ipv6 = addr;
+                    }
+                }
 
-        let conf = NetifConf {
-            ipv4: Ipv4Addr::UNSPECIFIED,
-            ipv6,
-            interface: 0,
-            mac: [0, 0, 0, 0, 0, 0], // TODO
-        };
+                Ok(())
+            });
 
-        Some(conf)
+            let conf = NetifConf {
+                ipv4: Ipv4Addr::UNSPECIFIED,
+                ipv6,
+                interface: 0,
+                mac: [0, 0, 0, 0, 0, 0], // TODO
+            };
+
+            Some(conf)
+        } else {
+            None
+        }
     }
 
     async fn wait_conf_change(&self) {

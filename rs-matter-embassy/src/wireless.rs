@@ -685,6 +685,10 @@ pub mod thread {
         where
             A: WirelessTask<Data = Self::Data>,
         {
+            fn to_matter_err(_err: OtError) -> Error {
+                Error::new(ErrorCode::NoNetworkInterface)
+            }
+
             struct ThreadRadioTaskImpl<'a, A> {
                 mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
                 context: &'a OtNetContext,
@@ -711,11 +715,11 @@ pub mod thread {
                         ot_udp_resources,
                         ot_srp_resources,
                     )
-                    .unwrap();
+                    .map_err(to_matter_err)?;
 
                     let controller = OtController(ot);
                     let netif = OtNetif::new(ot);
-                    let mdns = OtMdns::new(ot, self.mdns_services).unwrap();
+                    let mdns = OtMdns::new(ot, self.mdns_services).map_err(to_matter_err)?;
 
                     let mut main = pin!(self.task.run(netif, ot, controller));
                     let mut radio = pin!(async {
@@ -723,13 +727,18 @@ pub mod thread {
                         #[allow(unreachable_code)]
                         Ok(())
                     });
-                    let mut mdns = pin!(async {
-                        mdns.run().await.unwrap(); // TODO
-                        #[allow(unreachable_code)]
-                        Ok(())
-                    });
+                    let mut mdns = pin!(async { mdns.run().await.map_err(to_matter_err) });
 
-                    select3(&mut main, &mut radio, &mut mdns).coalesce().await
+                    ot.enable_ipv6(true).map_err(to_matter_err)?;
+                    ot.enable_thread(true).map_err(to_matter_err)?;
+                    ot.srp_autostart().map_err(to_matter_err)?;
+
+                    let result = select3(&mut main, &mut radio, &mut mdns).coalesce().await;
+
+                    let _ = ot.enable_thread(false).map_err(to_matter_err);
+                    let _ = ot.enable_ipv6(false).map_err(to_matter_err);
+
+                    result
                 }
             }
 
