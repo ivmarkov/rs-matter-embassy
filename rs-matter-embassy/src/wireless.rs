@@ -92,27 +92,44 @@ where
     }
 }
 
-/// A companion trait of `EmbassyBle` for providing a BLE controller.
-pub trait BleControllerProvider {
-    type Controller<'a>: Controller
+/// A trait representing a task that needs access to the BLE controller to perform its work
+pub trait BleControllerTask {
+    /// Run the task with the given BLE controller
+    async fn run<C>(&mut self, controller: C) -> Result<(), Error>
     where
-        Self: 'a;
-
-    /// Provide a BLE controller by creating it when the Matter stack needs it
-    async fn provide(&mut self) -> Self::Controller<'_>;
+        C: Controller;
 }
 
-impl<T> BleControllerProvider for &mut T
+impl<T> BleControllerTask for &mut T
 where
-    T: BleControllerProvider,
+    T: BleControllerTask,
 {
-    type Controller<'a>
-        = T::Controller<'a>
+    async fn run<C>(&mut self, controller: C) -> Result<(), Error>
     where
-        Self: 'a;
+        C: Controller,
+    {
+        (*self).run(controller).await
+    }
+}
 
-    async fn provide(&mut self) -> Self::Controller<'_> {
-        (*self).provide().await
+/// A trait for running a task within a context where the BLE Controller is initialized and operable
+/// (e.g. in a commissioning workflow)
+pub trait BleController {
+    /// Setup the BLE controller and run the given task with it
+    async fn run<T>(&mut self, task: T) -> Result<(), Error>
+    where
+        T: BleControllerTask;
+}
+
+impl<T> BleController for &mut T
+where
+    T: BleController,
+{
+    async fn run<U>(&mut self, task: U) -> Result<(), Error>
+    where
+        U: BleControllerTask,
+    {
+        (*self).run(task).await
     }
 }
 
@@ -127,17 +144,17 @@ impl<C> PreexistingBleController<C> {
     }
 }
 
-impl<C> BleControllerProvider for PreexistingBleController<C>
+impl<C> BleController for PreexistingBleController<C>
 where
     C: Controller,
 {
-    type Controller<'a>
-        = ControllerRef<'a, C>
+    async fn run<A>(&mut self, mut task: A) -> Result<(), Error>
     where
-        Self: 'a;
+        A: BleControllerTask,
+    {
+        let controller = ControllerRef::new(&self.0);
 
-    async fn provide(&mut self) -> Self::Controller<'_> {
-        ControllerRef::new(&self.0)
+        task.run(controller).await
     }
 }
 
@@ -150,7 +167,7 @@ pub struct EmbassyBle<'a, T> {
 
 impl<'a, T> EmbassyBle<'a, T>
 where
-    T: BleControllerProvider,
+    T: BleController,
 {
     /// Create a new instance of the `EmbassyBle` type.
     pub fn new<E, Q>(provider: T, stack: &'a EmbassyWirelessMatterStack<'a, Q, E>) -> Self
@@ -182,17 +199,39 @@ where
 
 impl<T> Ble for EmbassyBle<'_, T>
 where
-    T: BleControllerProvider,
+    T: BleController,
 {
-    async fn run<A>(&mut self, mut task: A) -> Result<(), Error>
+    async fn run<A>(&mut self, task: A) -> Result<(), Error>
     where
         A: BleTask,
     {
-        let controller = self.provider.provide().await;
+        struct BleControllerTaskImpl<'a, A> {
+            task: A,
+            rand: Rand,
+            context: &'a TroubleBtpGattContext<CriticalSectionRawMutex>,
+        }
 
-        let peripheral = TroubleBtpGattPeripheral::new(controller, self.rand, self.context);
+        impl<A> BleControllerTask for BleControllerTaskImpl<'_, A>
+        where
+            A: BleTask,
+        {
+            async fn run<C>(&mut self, controller: C) -> Result<(), Error>
+            where
+                C: Controller,
+            {
+                let peripheral = TroubleBtpGattPeripheral::new(controller, self.rand, self.context);
 
-        task.run(&peripheral).await
+                self.task.run(&peripheral).await
+            }
+        }
+
+        self.provider
+            .run(BleControllerTaskImpl {
+                task,
+                rand: self.rand,
+                context: self.context,
+            })
+            .await
     }
 }
 
@@ -226,15 +265,17 @@ pub mod esp {
     use esp_wifi::ble::controller::BleConnector;
     use esp_wifi::EspWifiController;
 
+    use rs_matter_stack::matter::error::Error;
+
     const SLOTS: usize = 20;
 
-    /// A `BleControllerProvider` implementation for the ESP32 family of chips.
-    pub struct EspBleControllerProvider<'a, 'd> {
+    /// A `BleController` implementation for the ESP32 family of chips.
+    pub struct EspBleController<'a, 'd> {
         controller: &'a EspWifiController<'d>,
         peripheral: PeripheralRef<'d, esp_hal::peripherals::BT>,
     }
 
-    impl<'a, 'd> EspBleControllerProvider<'a, 'd> {
+    impl<'a, 'd> EspBleController<'a, 'd> {
         /// Create a new instance
         ///
         /// # Arguments
@@ -251,15 +292,231 @@ pub mod esp {
         }
     }
 
-    impl super::BleControllerProvider for EspBleControllerProvider<'_, '_> {
-        type Controller<'t>
-            = ExternalController<BleConnector<'t>, SLOTS>
+    impl super::BleController for EspBleController<'_, '_> {
+        async fn run<T>(&mut self, mut task: T) -> Result<(), Error>
         where
-            Self: 't;
+            T: super::BleControllerTask,
+        {
+            let controller = ExternalController::<_, SLOTS>::new(BleConnector::new(
+                self.controller,
+                &mut self.peripheral,
+            ));
 
-        async fn provide(&mut self) -> Self::Controller<'_> {
-            ExternalController::new(BleConnector::new(self.controller, &mut self.peripheral))
+            task.run(controller).await
         }
+    }
+}
+
+#[cfg(feature = "nrf")]
+pub mod nrf {
+    use embassy_nrf::interrupt::typelevel::Interrupt;
+    use embassy_nrf::interrupt::{self, typelevel::Binding};
+    use embassy_nrf::into_ref;
+    use embassy_nrf::peripherals::{
+        PPI_CH17, PPI_CH18, PPI_CH19, PPI_CH20, PPI_CH21, PPI_CH22, PPI_CH23, PPI_CH24, PPI_CH25,
+        PPI_CH26, PPI_CH27, PPI_CH28, PPI_CH29, PPI_CH30, PPI_CH31, RADIO, RTC0, TEMP, TIMER0,
+    };
+    use embassy_nrf::Peripheral;
+    use embassy_nrf::PeripheralRef;
+
+    pub use nrf_sdc::mpsl::{
+        ClockInterruptHandler as NrfBleClockInterruptHandler,
+        HighPrioInterruptHandler as NrfBleHighPrioInterruptHandler,
+        LowPrioInterruptHandler as NrfBleLowPrioInterruptHandler,
+    };
+
+    use rs_matter_stack::matter::error::{Error, ErrorCode};
+    use rs_matter_stack::matter::utils::rand::Rand;
+    use rs_matter_stack::rand::MatterRngCore;
+
+    use super::BleController;
+
+    /// How many outgoing L2CAP buffers per link
+    const L2CAP_TXQ: u8 = 3;
+    /// How many incoming L2CAP buffers per link
+    const L2CAP_RXQ: u8 = 3;
+    /// Size of L2CAP packets
+    const L2CAP_MTU: usize = 27;
+
+    struct NrfBleControllerInterrupts;
+
+    unsafe impl<T> Binding<T, NrfBleLowPrioInterruptHandler> for NrfBleControllerInterrupts where
+        T: interrupt::typelevel::Interrupt
+    {
+    }
+
+    unsafe impl Binding<interrupt::typelevel::RADIO, NrfBleHighPrioInterruptHandler>
+        for NrfBleControllerInterrupts
+    {
+    }
+    unsafe impl Binding<interrupt::typelevel::TIMER0, NrfBleHighPrioInterruptHandler>
+        for NrfBleControllerInterrupts
+    {
+    }
+    unsafe impl Binding<interrupt::typelevel::RTC0, NrfBleHighPrioInterruptHandler>
+        for NrfBleControllerInterrupts
+    {
+    }
+    unsafe impl Binding<interrupt::typelevel::CLOCK_POWER, NrfBleClockInterruptHandler>
+        for NrfBleControllerInterrupts
+    {
+    }
+
+    pub struct NrfBleController<'d> {
+        _radio: PeripheralRef<'d, RADIO>,
+        rtc0: PeripheralRef<'d, RTC0>,
+        timer0: PeripheralRef<'d, TIMER0>,
+        temp: PeripheralRef<'d, TEMP>,
+        ppi_ch17: PeripheralRef<'d, PPI_CH17>,
+        ppi_ch18: PeripheralRef<'d, PPI_CH18>,
+        ppi_ch19: PeripheralRef<'d, PPI_CH19>,
+        ppi_ch20: PeripheralRef<'d, PPI_CH20>,
+        ppi_ch21: PeripheralRef<'d, PPI_CH21>,
+        ppi_ch22: PeripheralRef<'d, PPI_CH22>,
+        ppi_ch23: PeripheralRef<'d, PPI_CH23>,
+        ppi_ch24: PeripheralRef<'d, PPI_CH24>,
+        ppi_ch25: PeripheralRef<'d, PPI_CH25>,
+        ppi_ch26: PeripheralRef<'d, PPI_CH26>,
+        ppi_ch27: PeripheralRef<'d, PPI_CH27>,
+        ppi_ch28: PeripheralRef<'d, PPI_CH28>,
+        ppi_ch29: PeripheralRef<'d, PPI_CH29>,
+        ppi_ch30: PeripheralRef<'d, PPI_CH30>,
+        ppi_ch31: PeripheralRef<'d, PPI_CH31>,
+        rand: Rand,
+    }
+
+    impl<'d> NrfBleController<'d> {
+        #[allow(clippy::too_many_arguments)]
+        pub fn new<T, I>(
+            radio: impl Peripheral<P = RADIO> + 'd,
+            rtc0: impl Peripheral<P = RTC0> + 'd,
+            timer0: impl Peripheral<P = TIMER0> + 'd,
+            temp: impl Peripheral<P = TEMP> + 'd,
+            ppi_ch17: impl Peripheral<P = PPI_CH17> + 'd,
+            ppi_ch18: impl Peripheral<P = PPI_CH18> + 'd,
+            ppi_ch19: impl Peripheral<P = PPI_CH19> + 'd,
+            ppi_ch20: impl Peripheral<P = PPI_CH20> + 'd,
+            ppi_ch21: impl Peripheral<P = PPI_CH21> + 'd,
+            ppi_ch22: impl Peripheral<P = PPI_CH22> + 'd,
+            ppi_ch23: impl Peripheral<P = PPI_CH23> + 'd,
+            ppi_ch24: impl Peripheral<P = PPI_CH24> + 'd,
+            ppi_ch25: impl Peripheral<P = PPI_CH25> + 'd,
+            ppi_ch26: impl Peripheral<P = PPI_CH26> + 'd,
+            ppi_ch27: impl Peripheral<P = PPI_CH27> + 'd,
+            ppi_ch28: impl Peripheral<P = PPI_CH28> + 'd,
+            ppi_ch29: impl Peripheral<P = PPI_CH29> + 'd,
+            ppi_ch30: impl Peripheral<P = PPI_CH30> + 'd,
+            ppi_ch31: impl Peripheral<P = PPI_CH31> + 'd,
+            rand: Rand,
+            _irqs: I,
+        ) -> Self
+        where
+            T: Interrupt,
+            I: Binding<T, NrfBleLowPrioInterruptHandler>
+                + Binding<interrupt::typelevel::RADIO, NrfBleHighPrioInterruptHandler>
+                + Binding<interrupt::typelevel::TIMER0, NrfBleHighPrioInterruptHandler>
+                + Binding<interrupt::typelevel::RTC0, NrfBleHighPrioInterruptHandler>
+                + Binding<interrupt::typelevel::CLOCK_POWER, NrfBleClockInterruptHandler>,
+        {
+            into_ref!(
+                radio, rtc0, timer0, temp, ppi_ch17, ppi_ch18, ppi_ch19, ppi_ch20, ppi_ch21,
+                ppi_ch22, ppi_ch23, ppi_ch24, ppi_ch25, ppi_ch26, ppi_ch27, ppi_ch28, ppi_ch29,
+                ppi_ch30, ppi_ch31
+            );
+
+            Self {
+                _radio: radio,
+                rtc0,
+                timer0,
+                temp,
+                ppi_ch17,
+                ppi_ch18,
+                ppi_ch19,
+                ppi_ch20,
+                ppi_ch21,
+                ppi_ch22,
+                ppi_ch23,
+                ppi_ch24,
+                ppi_ch25,
+                ppi_ch26,
+                ppi_ch27,
+                ppi_ch28,
+                ppi_ch29,
+                ppi_ch30,
+                ppi_ch31,
+                rand,
+            }
+        }
+    }
+
+    impl<'d> BleController for NrfBleController<'d> {
+        async fn run<T>(&mut self, mut task: T) -> Result<(), rs_matter_stack::matter::error::Error>
+        where
+            T: super::BleControllerTask,
+        {
+            let mpsl_p = nrf_sdc::mpsl::Peripherals::new(
+                &mut self.rtc0,
+                &mut self.timer0,
+                &mut self.temp,
+                &mut self.ppi_ch19,
+                &mut self.ppi_ch30,
+                &mut self.ppi_ch31,
+            );
+
+            let sdc_p = nrf_sdc::Peripherals::new(
+                &mut self.ppi_ch17,
+                &mut self.ppi_ch18,
+                &mut self.ppi_ch20,
+                &mut self.ppi_ch21,
+                &mut self.ppi_ch22,
+                &mut self.ppi_ch23,
+                &mut self.ppi_ch24,
+                &mut self.ppi_ch25,
+                &mut self.ppi_ch26,
+                &mut self.ppi_ch27,
+                &mut self.ppi_ch28,
+                &mut self.ppi_ch29,
+            );
+
+            let lfclk_cfg = nrf_sdc::mpsl::raw::mpsl_clock_lfclk_cfg_t {
+                source: nrf_sdc::mpsl::raw::MPSL_CLOCK_LF_SRC_RC as u8,
+                rc_ctiv: nrf_sdc::mpsl::raw::MPSL_RECOMMENDED_RC_CTIV as u8,
+                rc_temp_ctiv: nrf_sdc::mpsl::raw::MPSL_RECOMMENDED_RC_TEMP_CTIV as u8,
+                accuracy_ppm: nrf_sdc::mpsl::raw::MPSL_DEFAULT_CLOCK_ACCURACY_PPM as u16,
+                skip_wait_lfclk_started: nrf_sdc::mpsl::raw::MPSL_DEFAULT_SKIP_WAIT_LFCLK_STARTED
+                    != 0,
+            };
+
+            let mpsl = nrf_sdc::mpsl::MultiprotocolServiceLayer::new::<
+                interrupt::typelevel::EGU0_SWI0,
+                _,
+            >(mpsl_p, NrfBleControllerInterrupts, lfclk_cfg)
+            .map_err(to_matter_err)?;
+
+            // TODO: Externalize as resources
+            let mut sdc_mem = nrf_sdc::Mem::<3312>::new();
+
+            let mut rng = MatterRngCore::new(self.rand);
+
+            let controller = nrf_sdc::Builder::new()
+                .map_err(to_matter_err)?
+                .support_adv()
+                .map_err(to_matter_err)?
+                .support_peripheral()
+                .map_err(to_matter_err)?
+                .peripheral_count(1)
+                .map_err(to_matter_err)?
+                .buffer_cfg(L2CAP_MTU as u8, L2CAP_MTU as u8, L2CAP_TXQ, L2CAP_RXQ)
+                .map_err(to_matter_err)?
+                .build(sdc_p, &mut rng, &mpsl, &mut sdc_mem)
+                .map_err(to_matter_err)?;
+
+            task.run(controller).await
+        }
+    }
+
+    fn to_matter_err<E>(_: E) -> Error {
+        Error::new(ErrorCode::BtpError)
     }
 }
 
@@ -274,9 +531,7 @@ pub mod thread {
 
     use log::error;
 
-    use openthread::{
-        Channels, OpenThread, OtError, OtResources, OtRngCore, OtRngCoreError, Radio,
-    };
+    use openthread::{Channels, OpenThread, OtError, OtResources, Radio};
 
     use rs_matter_stack::matter::error::{Error, ErrorCode};
     use rs_matter_stack::matter::tlv::OctetsOwned;
@@ -286,6 +541,7 @@ pub mod thread {
     use rs_matter_stack::matter::utils::sync::IfMutex;
     use rs_matter_stack::mdns::MatterMdnsServices;
     use rs_matter_stack::network::{Embedding, Network};
+    use rs_matter_stack::rand::MatterRngCore;
     use rs_matter_stack::wireless::traits::{
         ConcurrencyMode, Controller, NetworkCredentials, Thread, ThreadData, ThreadId,
         ThreadScanResult, Wireless, WirelessData, WirelessTask, NC,
@@ -310,52 +566,66 @@ pub mod thread {
     pub type EmbassyThreadNCMatterStack<'a, E> =
         EmbassyWirelessMatterStack<'a, Thread<NC>, OtNetContext, E>;
 
-    /// A companion trait of `EmbassyThread` for providing a Thread radio and controller.
-    pub trait ThreadRadioProvider {
-        type Radio<'a>: Radio
+    /// A trait representing a task that needs access to the Thread radio to perform its work
+    pub trait ThreadRadioTask {
+        /// Run the task with the given Thread radio
+        async fn run<R>(&mut self, radio: R) -> Result<(), Error>
         where
-            Self: 'a;
-
-        /// Provide a Thread radio by creating it when the Matter stack needs it
-        async fn provide(&mut self) -> Self::Radio<'_>;
+            R: Radio;
     }
 
-    impl<T> ThreadRadioProvider for &mut T
+    impl<T> ThreadRadioTask for &mut T
     where
-        T: ThreadRadioProvider,
+        T: ThreadRadioTask,
     {
-        type Radio<'a>
-            = T::Radio<'a>
+        async fn run<R>(&mut self, radio: R) -> Result<(), Error>
         where
-            Self: 'a;
-
-        async fn provide(&mut self) -> Self::Radio<'_> {
-            (*self).provide().await
+            R: Radio,
+        {
+            (*self).run(radio).await
         }
     }
 
-    /// A Wifi driver provider that uses a pre-existing, already created Thread radio and controller,
-    /// rather than creating them when the Matter stack needs them.
+    /// A companion trait of `EmbassyThread` for providing a Thread radio and controller.
+    pub trait ThreadRadio {
+        /// Setup the Thread radio and run the given task with it
+        async fn run<A>(&mut self, task: A) -> Result<(), Error>
+        where
+            A: ThreadRadioTask;
+    }
+
+    impl<T> ThreadRadio for &mut T
+    where
+        T: ThreadRadio,
+    {
+        async fn run<A>(&mut self, task: A) -> Result<(), Error>
+        where
+            A: ThreadRadioTask,
+        {
+            (*self).run(task).await
+        }
+    }
+
+    /// A Thread radio provider that uses a pre-existing, already created Thread radio,
+    /// rather than creating it when the Matter stack needs it.
     pub struct PreexistingThreadRadio<R>(R);
 
     impl<R> PreexistingThreadRadio<R> {
-        /// Create a new instance of the `PreexistingWifiDriver` type.
+        /// Create a new instance of the `PreexistingThreadRadio` type.
         pub const fn new(radio: R) -> Self {
             Self(radio)
         }
     }
 
-    impl<R> ThreadRadioProvider for PreexistingThreadRadio<R>
+    impl<R> ThreadRadio for PreexistingThreadRadio<R>
     where
         R: Radio,
     {
-        type Radio<'t>
-            = &'t mut R
+        async fn run<A>(&mut self, mut task: A) -> Result<(), Error>
         where
-            Self: 't;
-
-        async fn provide(&mut self) -> Self::Radio<'_> {
-            &mut self.0
+            A: ThreadRadioTask,
+        {
+            task.run(&mut self.0).await
         }
     }
 
@@ -369,7 +639,7 @@ pub mod thread {
 
     impl<'a, T> EmbassyThread<'a, T>
     where
-        T: ThreadRadioProvider,
+        T: ThreadRadio,
     {
         /// Create a new instance of the `EmbassyThread` type.
         pub fn new<E, M>(
@@ -407,46 +677,70 @@ pub mod thread {
 
     impl<T> Wireless for EmbassyThread<'_, T>
     where
-        T: ThreadRadioProvider,
+        T: ThreadRadio,
     {
         type Data = ThreadData;
 
-        async fn run<A>(&mut self, mut task: A) -> Result<(), Error>
+        async fn run<A>(&mut self, task: A) -> Result<(), Error>
         where
             A: WirelessTask<Data = Self::Data>,
         {
-            let radio = self.provider.provide().await;
+            struct ThreadRadioTaskImpl<'a, A> {
+                mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
+                context: &'a OtNetContext,
+                rand: Rand,
+                task: A,
+            }
 
-            let mut resources = self.context.resources.lock().await;
-            let (ot_resources, ot_udp_resources, ot_srp_resources) = &mut *resources;
+            impl<'a, A> ThreadRadioTask for ThreadRadioTaskImpl<'a, A>
+            where
+                A: WirelessTask<Data = ThreadData>,
+            {
+                async fn run<R>(&mut self, radio: R) -> Result<(), Error>
+                where
+                    R: Radio,
+                {
+                    let mut resources = self.context.resources.lock().await;
+                    let (ot_resources, ot_udp_resources, ot_srp_resources) = &mut *resources;
 
-            let mut rng = OtRngCoreImpl(self.rand);
+                    let mut rng = MatterRngCore::new(self.rand);
 
-            let ot = OpenThread::new_with_udp_srp(
-                &mut rng,
-                ot_resources,
-                ot_udp_resources,
-                ot_srp_resources,
-            )
-            .unwrap();
+                    let ot = OpenThread::new_with_udp_srp(
+                        &mut rng,
+                        ot_resources,
+                        ot_udp_resources,
+                        ot_srp_resources,
+                    )
+                    .unwrap();
 
-            let controller = OtController(ot);
-            let netif = OtNetif::new(ot);
-            let mdns = OtMdns::new(ot, self.mdns_services).unwrap();
+                    let controller = OtController(ot);
+                    let netif = OtNetif::new(ot);
+                    let mdns = OtMdns::new(ot, self.mdns_services).unwrap();
 
-            let mut main = pin!(task.run(netif, ot, controller));
-            let mut radio = pin!(async {
-                ot.run(radio).await;
-                #[allow(unreachable_code)]
-                Ok(())
-            });
-            let mut mdns = pin!(async {
-                mdns.run().await.unwrap(); // TODO
-                #[allow(unreachable_code)]
-                Ok(())
-            });
+                    let mut main = pin!(self.task.run(netif, ot, controller));
+                    let mut radio = pin!(async {
+                        ot.run(radio).await;
+                        #[allow(unreachable_code)]
+                        Ok(())
+                    });
+                    let mut mdns = pin!(async {
+                        mdns.run().await.unwrap(); // TODO
+                        #[allow(unreachable_code)]
+                        Ok(())
+                    });
 
-            select3(&mut main, &mut radio, &mut mdns).coalesce().await
+                    select3(&mut main, &mut radio, &mut mdns).coalesce().await
+                }
+            }
+
+            self.provider
+                .run(ThreadRadioTaskImpl {
+                    mdns_services: self.mdns_services,
+                    context: self.context,
+                    rand: self.rand,
+                    task,
+                })
+                .await
         }
     }
 
@@ -598,49 +892,22 @@ pub mod thread {
         ErrorCode::NoNetworkInterface.into()
     }
 
-    /// Adapt `rs-matter`'s `Rand` to `RngCore` necessary for OpenThread
-    struct OtRngCoreImpl(Rand);
-
-    impl OtRngCore for OtRngCoreImpl {
-        fn next_u32(&mut self) -> u32 {
-            let mut bytes = [0; 4];
-            (self.0)(&mut bytes);
-
-            u32::from_ne_bytes(bytes)
-        }
-
-        fn next_u64(&mut self) -> u64 {
-            let mut bytes = [0; 8];
-            (self.0)(&mut bytes);
-
-            u64::from_ne_bytes(bytes)
-        }
-
-        fn fill_bytes(&mut self, dest: &mut [u8]) {
-            (self.0)(dest);
-        }
-
-        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), OtRngCoreError> {
-            (self.0)(dest);
-
-            Ok(())
-        }
-    }
-
     #[cfg(feature = "esp")]
     pub mod esp {
         use esp_hal::peripheral::{Peripheral, PeripheralRef};
 
         use openthread::esp::EspRadio;
 
-        /// A `ThreadRadioProvider` implementation for the ESP32 family of chips.
-        pub struct EspThreadRadioProvider<'d> {
+        use rs_matter_stack::matter::error::Error;
+
+        /// A `ThreadRadio` implementation for the ESP32 family of chips.
+        pub struct EspThreadRadio<'d> {
             _radio_peripheral: PeripheralRef<'d, esp_hal::peripherals::IEEE802154>,
             _radio_clk_peripheral: PeripheralRef<'d, esp_hal::peripherals::RADIO_CLK>,
         }
 
-        impl<'d> EspThreadRadioProvider<'d> {
-            /// Create a new instance of the `EspThreadRadioDriverProvider` type.
+        impl<'d> EspThreadRadio<'d> {
+            /// Create a new instance of the `EspThreadRadio` type.
             ///
             /// # Arguments
             /// - `peripheral` - The Thread radio peripheral instance.
@@ -655,19 +922,142 @@ pub mod thread {
             }
         }
 
-        impl super::ThreadRadioProvider for EspThreadRadioProvider<'_> {
-            type Radio<'t>
-                = EspRadio<'t>
+        impl super::ThreadRadio for EspThreadRadio<'_> {
+            async fn run<A>(&mut self, mut task: A) -> Result<(), Error>
             where
-                Self: 't;
-
-            async fn provide(&mut self) -> Self::Radio<'_> {
+                A: super::ThreadRadioTask,
+            {
                 // See https://github.com/esp-rs/esp-hal/issues/3238
                 //EspRadio::new(openthread::esp::Ieee802154::new(&mut self.radio_peripheral, &mut self.radio_clk_peripheral))
-                EspRadio::new(openthread::esp::Ieee802154::new(
+                let radio = EspRadio::new(openthread::esp::Ieee802154::new(
                     unsafe { esp_hal::peripherals::IEEE802154::steal() },
                     unsafe { esp_hal::peripherals::RADIO_CLK::steal() },
+                ));
+
+                task.run(radio).await
+            }
+        }
+    }
+
+    #[cfg(feature = "nrf")]
+    pub mod nrf {
+        use core::cell::Cell;
+
+        use embassy_nrf::interrupt;
+        use embassy_nrf::interrupt::typelevel::{Binding, Handler};
+        use embassy_nrf::radio::InterruptHandler;
+        use embassy_nrf::{Peripheral, PeripheralRef};
+
+        use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+        use embassy_sync::blocking_mutex::Mutex;
+
+        use openthread::nrf::Ieee802154Peripheral;
+        use openthread::nrf::NrfRadio;
+        use openthread::{PhyRadioRunner, ProxyRadio, ProxyRadioResources, Radio};
+
+        use rs_matter_stack::matter::error::Error;
+
+        pub use openthread::ProxyRadioResources as NrfThreadRadioResources;
+
+        pub struct NrfThreadRadioInterruptHandler;
+
+        impl Handler<interrupt::typelevel::RADIO> for NrfThreadRadioInterruptHandler {
+            unsafe fn on_interrupt() {
+                if IEEE802154_ENABLED.lock(Cell::get) {
+                    // Call the IEEE 802.15.4 driver interrupt handler, if the driver is enabled
+                    InterruptHandler::<embassy_nrf::peripherals::RADIO>::on_interrupt();
+                }
+            }
+        }
+
+        static IEEE802154_ENABLED: Mutex<CriticalSectionRawMutex, Cell<bool>> =
+            Mutex::new(Cell::new(false));
+
+        struct NrfThreadRadioInterrupts;
+
+        unsafe impl
+            Binding<
+                <embassy_nrf::peripherals::RADIO as Ieee802154Peripheral>::Interrupt,
+                InterruptHandler<embassy_nrf::peripherals::RADIO>,
+            > for NrfThreadRadioInterrupts
+        {
+        }
+
+        /// A runner for the NRF52 PHY radio
+        /// Needs to run in a high-prio execution context
+        pub struct NrfThreadRadioRunner<'a, 'd> {
+            runner: PhyRadioRunner<'a>,
+            radio_peripheral: PeripheralRef<'d, embassy_nrf::peripherals::RADIO>,
+        }
+
+        impl<'a, 'd> NrfThreadRadioRunner<'a, 'd> {
+            fn new(
+                runner: PhyRadioRunner<'a>,
+                radio_peripheral: impl Peripheral<P = embassy_nrf::peripherals::RADIO> + 'd,
+            ) -> Self {
+                Self {
+                    runner,
+                    radio_peripheral: radio_peripheral.into_ref(),
+                }
+            }
+
+            /// Run the PHY radio
+            pub async fn run(&mut self) -> ! {
+                let radio = NrfRadio::new(embassy_nrf::radio::ieee802154::Radio::new(
+                    &mut self.radio_peripheral,
+                    NrfThreadRadioInterrupts,
+                ));
+
+                self.runner.run(radio, embassy_time::Delay).await
+            }
+        }
+
+        /// A `ThreadRadio` implementation for the NRF52 family of chips.
+        pub struct NrfThreadRadio<'a>(ProxyRadio<'a>);
+
+        impl<'a> NrfThreadRadio<'a> {
+            /// Create a new instance of the `NrfThreadRadio` type.
+            ///
+            /// # Arguments
+            /// - `resources` - The resources for the radio proxying
+            /// - `radio_peripheral` - The radio peripheral instance
+            /// - `irq` - The radio interrupt binding
+            pub fn new<'d, I>(
+                resources: &'a mut ProxyRadioResources,
+                mut radio_peripheral: impl Peripheral<P = embassy_nrf::peripherals::RADIO> + 'd,
+                _irq: I,
+            ) -> (Self, NrfThreadRadioRunner<'a, 'd>)
+            where
+                I: Binding<
+                    <embassy_nrf::peripherals::RADIO as Ieee802154Peripheral>::Interrupt,
+                    NrfThreadRadioInterruptHandler,
+                >,
+            {
+                // TODO: A bit dirty as we create it and then drop it immediately
+                let caps = NrfRadio::new(embassy_nrf::radio::ieee802154::Radio::new(
+                    &mut radio_peripheral,
+                    NrfThreadRadioInterrupts,
                 ))
+                .caps();
+
+                let (proxy, proxy_runner) = ProxyRadio::new(caps, resources);
+
+                let runner = NrfThreadRadioRunner::new(proxy_runner, radio_peripheral);
+
+                (Self(proxy), runner)
+            }
+        }
+
+        impl super::ThreadRadio for NrfThreadRadio<'_> {
+            async fn run<A>(&mut self, mut task: A) -> Result<(), Error>
+            where
+                A: super::ThreadRadioTask,
+            {
+                let _guard = scopeguard::guard((), |_| IEEE802154_ENABLED.lock(|s| s.set(false)));
+
+                IEEE802154_ENABLED.lock(|s| s.set(true));
+
+                task.run(&mut self.0).await
             }
         }
     }
@@ -716,34 +1106,43 @@ pub mod wifi {
     pub type EmbassyWifiNCMatterStack<'a, E> =
         EmbassyWirelessMatterStack<'a, Wifi<NC>, EmbassyNetContext, E>;
 
-    /// A companion trait of `EmbassyWifi` for providing a Wifi driver and controller.
-    pub trait WifiDriverProvider {
-        type Driver<'a>: embassy_net::driver::Driver
+    pub trait WifiDriverTask {
+        async fn run<D, C>(&mut self, driver: D, controller: C) -> Result<(), Error>
         where
-            Self: 'a;
-        type Controller<'a>: Controller<Data = WifiData>
-        where
-            Self: 'a;
-
-        /// Provide a Wifi driver and controller by creating these when the Matter stack needs them
-        async fn provide(&mut self) -> (Self::Driver<'_>, Self::Controller<'_>);
+            D: embassy_net::driver::Driver,
+            C: Controller<Data = WifiData>;
     }
 
-    impl<T> WifiDriverProvider for &mut T
+    impl<T> WifiDriverTask for &mut T
     where
-        T: WifiDriverProvider,
+        T: WifiDriverTask,
     {
-        type Driver<'a>
-            = T::Driver<'a>
+        async fn run<D, C>(&mut self, driver: D, controller: C) -> Result<(), Error>
         where
-            Self: 'a;
-        type Controller<'a>
-            = T::Controller<'a>
-        where
-            Self: 'a;
+            D: embassy_net::driver::Driver,
+            C: Controller<Data = WifiData>,
+        {
+            (*self).run(driver, controller).await
+        }
+    }
 
-        async fn provide(&mut self) -> (Self::Driver<'_>, Self::Controller<'_>) {
-            (*self).provide().await
+    /// A companion trait of `EmbassyWifi` for providing a Wifi driver and controller.
+    pub trait WifiDriver {
+        /// Provide a Wifi driver and controller by creating these when the Matter stack needs them
+        async fn run<A>(&mut self, task: A) -> Result<(), Error>
+        where
+            A: WifiDriverTask;
+    }
+
+    impl<T> WifiDriver for &mut T
+    where
+        T: WifiDriver,
+    {
+        async fn run<A>(&mut self, task: A) -> Result<(), Error>
+        where
+            A: WifiDriverTask,
+        {
+            (*self).run(task).await
         }
     }
 
@@ -758,22 +1157,16 @@ pub mod wifi {
         }
     }
 
-    impl<D, C> WifiDriverProvider for PreexistingWifiDriver<D, C>
+    impl<D, C> WifiDriver for PreexistingWifiDriver<D, C>
     where
         D: embassy_net::driver::Driver,
         C: Controller<Data = WifiData>,
     {
-        type Driver<'a>
-            = &'a mut D
+        async fn run<A>(&mut self, mut task: A) -> Result<(), Error>
         where
-            Self: 'a;
-        type Controller<'a>
-            = &'a mut C
-        where
-            Self: 'a;
-
-        async fn provide(&mut self) -> (Self::Driver<'_>, Self::Controller<'_>) {
-            (&mut self.0, &mut self.1)
+            A: WifiDriverTask,
+        {
+            task.run(&mut self.0, &mut self.1).await
         }
     }
 
@@ -786,7 +1179,7 @@ pub mod wifi {
 
     impl<'a, T> EmbassyWifi<'a, T>
     where
-        T: WifiDriverProvider,
+        T: WifiDriver,
     {
         /// Create a new instance of the `EmbassyWifi` type.
         pub fn new<E, M>(
@@ -816,37 +1209,60 @@ pub mod wifi {
 
     impl<T> Wireless for EmbassyWifi<'_, T>
     where
-        T: WifiDriverProvider,
+        T: WifiDriver,
     {
         type Data = WifiData;
 
-        async fn run<A>(&mut self, mut task: A) -> Result<(), Error>
+        async fn run<A>(&mut self, task: A) -> Result<(), Error>
         where
             A: WirelessTask<Data = Self::Data>,
         {
-            let (driver, controller) = self.provider.provide().await;
+            struct WifiDriverTaskImpl<'a, A> {
+                context: &'a EmbassyNetContext,
+                rand: Rand,
+                task: A,
+            }
 
-            let mut resources = self.context.resources.lock().await;
-            let resources = &mut *resources;
-            let buffers = &self.context.buffers;
+            impl<'a, A> WifiDriverTask for WifiDriverTaskImpl<'a, A>
+            where
+                A: WirelessTask<Data = WifiData>,
+            {
+                async fn run<D, C>(&mut self, driver: D, controller: C) -> Result<(), Error>
+                where
+                    D: embassy_net::driver::Driver,
+                    C: Controller<Data = WifiData>,
+                {
+                    let mut resources = self.context.resources.lock().await;
+                    let resources = &mut *resources;
+                    let buffers = &self.context.buffers;
 
-            let mut seed = [0; core::mem::size_of::<u64>()];
-            (self.rand)(&mut seed);
+                    let mut seed = [0; core::mem::size_of::<u64>()];
+                    (self.rand)(&mut seed);
 
-            let (stack, mut runner) =
-                create_enet_stack(driver, u64::from_le_bytes(seed), resources);
+                    let (stack, mut runner) =
+                        create_enet_stack(driver, u64::from_le_bytes(seed), resources);
 
-            let netif = EnetNetif::new(stack);
-            let udp = Udp::new(stack, buffers);
+                    let netif = EnetNetif::new(stack);
+                    let udp = Udp::new(stack, buffers);
 
-            let mut main = pin!(task.run(netif, udp, controller));
-            let mut run = pin!(async {
-                runner.run().await;
-                #[allow(unreachable_code)]
-                Ok(())
-            });
+                    let mut main = pin!(self.task.run(netif, udp, controller));
+                    let mut run = pin!(async {
+                        runner.run().await;
+                        #[allow(unreachable_code)]
+                        Ok(())
+                    });
 
-            select(&mut main, &mut run).coalesce().await
+                    select(&mut main, &mut run).coalesce().await
+                }
+            }
+
+            self.provider
+                .run(WifiDriverTaskImpl {
+                    context: self.context,
+                    rand: self.rand,
+                    task,
+                })
+                .await
         }
     }
 
@@ -1040,8 +1456,8 @@ pub mod wifi {
     pub mod esp {
         use esp_hal::peripheral::{Peripheral, PeripheralRef};
         use esp_wifi::wifi::{
-            AuthMethod, ClientConfiguration, Configuration, ScanConfig, WifiController, WifiDevice,
-            WifiError, WifiStaDevice,
+            AuthMethod, ClientConfiguration, Configuration, ScanConfig, WifiController, WifiError,
+            WifiStaDevice,
         };
 
         use log::{error, info};
@@ -1056,14 +1472,14 @@ pub mod wifi {
 
         const MAX_NETWORKS: usize = 3;
 
-        /// A `WifiDriverProvider` implementation for the ESP32 family of chips.
-        pub struct EspWifiDriverProvider<'a, 'd> {
+        /// A `WifiDriver` implementation for the ESP32 family of chips.
+        pub struct EspWifiDriver<'a, 'd> {
             controller: &'a esp_wifi::EspWifiController<'d>,
             peripheral: PeripheralRef<'d, esp_hal::peripherals::WIFI>,
         }
 
-        impl<'a, 'd> EspWifiDriverProvider<'a, 'd> {
-            /// Create a new instance of the `Esp32WifiDriverProvider` type.
+        impl<'a, 'd> EspWifiDriver<'a, 'd> {
+            /// Create a new instance of the `Esp32WifiDriver` type.
             ///
             /// # Arguments
             /// - `controller` - The `esp-wifi` Wifi controller instance.
@@ -1079,17 +1495,11 @@ pub mod wifi {
             }
         }
 
-        impl super::WifiDriverProvider for EspWifiDriverProvider<'_, '_> {
-            type Driver<'t>
-                = WifiDevice<'t, WifiStaDevice>
+        impl super::WifiDriver for EspWifiDriver<'_, '_> {
+            async fn run<A>(&mut self, mut task: A) -> Result<(), Error>
             where
-                Self: 't;
-            type Controller<'t>
-                = EspWifiController<'t>
-            where
-                Self: 't;
-
-            async fn provide(&mut self) -> (Self::Driver<'_>, Self::Controller<'_>) {
+                A: super::WifiDriverTask,
+            {
                 let (wifi_interface, mut controller) = esp_wifi::wifi::new_with_mode(
                     self.controller,
                     &mut self.peripheral,
@@ -1102,7 +1512,8 @@ pub mod wifi {
                     .set_power_saving(esp_wifi::config::PowerSaveMode::None)
                     .unwrap();
 
-                (wifi_interface, EspWifiController::new(controller))
+                task.run(wifi_interface, EspWifiController::new(controller))
+                    .await
             }
         }
 

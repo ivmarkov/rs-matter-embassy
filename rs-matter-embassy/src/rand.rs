@@ -40,3 +40,30 @@ pub mod rp {
         rng.fill_bytes(buf);
     }
 }
+
+#[cfg(feature = "nrf")]
+pub mod nrf {
+    use core::cell::RefCell;
+
+    use embassy_nrf::peripherals::RNG;
+    use embassy_nrf::rng::Rng;
+
+    use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
+
+    static RAND: Mutex<CriticalSectionRawMutex, RefCell<Option<Rng<'_, RNG>>>> =
+        Mutex::new(RefCell::new(None));
+
+    /// Initialize the nrf-specific `rand` implementation
+    /// Need to do this only once
+    pub fn nrf_init_rand(rng: Rng<'static, RNG>) {
+        RAND.lock(|r| *r.borrow_mut() = Some(rng));
+    }
+
+    // TODO: Not cryptographically secure?
+    pub fn nrf_rand(buf: &mut [u8]) {
+        RAND.lock(|rng| {
+            let mut rng = rng.borrow_mut();
+            rng.as_mut().unwrap().blocking_fill_bytes(buf);
+        })
+    }
+}

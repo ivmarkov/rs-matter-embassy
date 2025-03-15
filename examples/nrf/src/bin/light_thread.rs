@@ -1,10 +1,8 @@
-//! An example utilizing the `EmbassyThreadNCMatterStack` struct.
+//! An example utilizing the `EmbassyThreadMatterStack` struct.
 //!
 //! As the name suggests, this Matter stack assembly uses Thread as the main transport,
-//! and thus BLE for commissioning, in non-concurrent commissioning mode
-//! (the IEEE802154 radio and BLE cannot not run at the same time yet with `esp-hal`).
-//!
-//! If you want to use Ethernet, utilize `EmbassyEthMatterStack` instead.
+//! and thus BLE for commissioning).
+//! TODO: below is not implemented for Nordic yet
 //!
 //! The example implements a fictitious Light device (an On-Off Matter cluster).
 #![no_std]
@@ -12,14 +10,19 @@
 
 use core::mem::MaybeUninit;
 use core::pin::pin;
+use core::ptr::addr_of_mut;
 
-use alloc::boxed::Box;
-use embassy_executor::Spawner;
+use embassy_nrf::interrupt;
+use embassy_nrf::interrupt::{InterruptExt, Priority};
+use embassy_nrf::peripherals::RNG;
+use embassy_nrf::{bind_interrupts, rng};
+
+use embassy_executor::{InterruptExecutor, Spawner};
 use embassy_futures::select::select;
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::{Duration, Timer};
 
-use esp_backtrace as _;
-use esp_hal::{clock::CpuClock, timer::timg::TimerGroup};
+use embedded_alloc::LlffHeap;
 
 use log::info;
 
@@ -32,85 +35,152 @@ use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
 use rs_matter_embassy::matter::MATTER_PORT;
-use rs_matter_embassy::rand::esp::{esp_init_rand, esp_rand};
+use rs_matter_embassy::rand::nrf::{nrf_init_rand, nrf_rand};
 use rs_matter_embassy::stack::mdns::MatterMdnsServices;
 use rs_matter_embassy::stack::persist::DummyPersist;
 use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
 use rs_matter_embassy::stack::MdnsType;
-use rs_matter_embassy::wireless::esp::EspBleController;
-use rs_matter_embassy::wireless::thread::esp::EspThreadRadio;
+use rs_matter_embassy::wireless::nrf::NrfBleController;
+use rs_matter_embassy::wireless::thread::nrf::{
+    NrfThreadRadio, NrfThreadRadioInterruptHandler, NrfThreadRadioResources, NrfThreadRadioRunner,
+};
 use rs_matter_embassy::wireless::thread::{EmbassyThread, EmbassyThreadNCMatterStack};
 use rs_matter_embassy::wireless::EmbassyBle;
 
-use tinyrlibc as _;
+use panic_rtt_target as _;
 
-extern crate alloc;
+use rtt_target::rtt_init_log;
 
-#[esp_hal_embassy::main]
+macro_rules! mk_static {
+    ($t:ty) => {{
+        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
+        #[deny(unused_attributes)]
+        let x = STATIC_CELL.uninit();
+        x
+    }};
+    ($t:ty,$val:expr) => {{
+        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
+        #[deny(unused_attributes)]
+        let x = STATIC_CELL.uninit().write(($val));
+        x
+    }};
+}
+
+bind_interrupts!(struct Irqs {
+    RNG => rng::InterruptHandler<RNG>;
+    EGU0_SWI0 => rs_matter_embassy::wireless::nrf::NrfBleLowPrioInterruptHandler;
+    CLOCK_POWER => rs_matter_embassy::wireless::nrf::NrfBleClockInterruptHandler;
+    RADIO => rs_matter_embassy::wireless::nrf::NrfBleHighPrioInterruptHandler, NrfThreadRadioInterruptHandler;
+    TIMER0 => rs_matter_embassy::wireless::nrf::NrfBleHighPrioInterruptHandler;
+    RTC0 => rs_matter_embassy::wireless::nrf::NrfBleHighPrioInterruptHandler;
+});
+
+#[interrupt]
+unsafe fn EGU1_SWI1() {
+    RADIO_EXECUTOR.on_interrupt()
+}
+
+static RADIO_EXECUTOR: InterruptExecutor = InterruptExecutor::new();
+
+#[global_allocator]
+static HEAP: LlffHeap = LlffHeap::empty();
+
+/// We need a bigger log ring-buffer or else the device QR code printout is half-lost
+const LOG_RINGBUF_SIZE: usize = 4096;
+
+#[embassy_executor::main]
 async fn main(_s: Spawner) {
-    esp_println::logger::init_logger(log::LevelFilter::Info);
+    // `rs-matter` uses the `x509` crate which (still) needs a few kilos of heap space
+    {
+        const HEAP_SIZE: usize = 8192;
+
+        static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
+        unsafe { HEAP.init(addr_of_mut!(HEAP_MEM) as usize, HEAP_SIZE) }
+    }
+
+    // == Step 1: ==
+    // Necessary `nrf-hal` initialization boilerplate
+
+    rtt_init_log!(
+        log::LevelFilter::Info,
+        rtt_target::ChannelMode::NoBlockSkip,
+        LOG_RINGBUF_SIZE
+    );
 
     info!("Starting...");
 
-    // Heap strictly necessary only for BLE and for the only Matter dependency which needs (~4KB) alloc - `x509`
-    // However since `esp32` specifically has a disjoint heap which causes bss size troubles, it is easier
-    // to allocate the statics once from heap as well
-    init_heap();
+    let p = embassy_nrf::init(Default::default()); // TODO: 32 kHz clock
 
-    // == Step 1: ==
-    // Necessary `esp-hal` initialization boilerplate
-
-    let peripherals = esp_hal::init({
-        let mut config = esp_hal::Config::default();
-        config.cpu_clock = CpuClock::max();
-        config
-    });
-
-    let timg0 = TimerGroup::new(peripherals.TIMG0);
-    let rng = esp_hal::rng::Rng::new(peripherals.RNG);
+    let rng = rng::Rng::new(p.RNG, Irqs);
 
     // To erase generics, `Matter` takes a rand `fn` rather than a trait or a closure,
     // so we need to initialize the global `rand` fn once
-    esp_init_rand(rng);
-
-    let init = esp_wifi::init(timg0.timer0, rng, peripherals.RADIO_CLK).unwrap();
-
-    // TODO: Rather than doing this here, move the `esp_wifi::init` call to the `EmbassyWifi` impl
-    // Also see https://github.com/esp-rs/esp-hal/issues/3239
-    let radio_clk_ieee802154 = unsafe { esp_hal::peripherals::RADIO_CLK::steal() };
-
-    #[cfg(not(feature = "esp32"))]
-    {
-        esp_hal_embassy::init(
-            esp_hal::timer::systimer::SystemTimer::new(peripherals.SYSTIMER).alarm0,
-        );
-    }
-    #[cfg(feature = "esp32")]
-    {
-        esp_hal_embassy::init(timg0.timer1);
-    }
+    nrf_init_rand(rng);
 
     // == Step 2: ==
     // Replace the built-in Matter mDNS responder with a bridge that delegates
     // all mDNS work to the OpenThread SRP client.
     // Thread is not friendly to IpV6 multicast, so we have to use SRP instead.
-    let mdns_services = &*Box::leak(Box::new_uninit())
+    let mdns_services = mk_static!(MatterMdnsServices<'static, NoopRawMutex>)
         .init_with(MatterMdnsServices::init(&TEST_BASIC_INFO, MATTER_PORT));
 
     // == Step 3: ==
     // Allocate the Matter stack.
     // For MCUs, it is best to allocate it statically, so as to avoid program stack blowups (its memory footprint is ~ 35 to 50KB).
     // It is also (currently) a mandatory requirement when the wireless stack variation is used.
-    let stack = &*Box::leak(Box::new_uninit()).init_with(EmbassyThreadNCMatterStack::<()>::init(
-        &TEST_BASIC_INFO,
-        TEST_BASIC_COMM_DATA,
-        &TEST_DEV_ATT,
-        MdnsType::Provided(mdns_services),
-        epoch,
-        esp_rand,
-    ));
+    let stack =
+        mk_static!(EmbassyThreadNCMatterStack<()>).init_with(EmbassyThreadNCMatterStack::init(
+            &TEST_BASIC_INFO,
+            TEST_BASIC_COMM_DATA,
+            &TEST_DEV_ATT,
+            MdnsType::Builtin,
+            epoch,
+            nrf_rand,
+        ));
+
+    let nrf_ble_controller = NrfBleController::new(
+        p.RADIO,
+        p.RTC0,
+        p.TIMER0,
+        p.TEMP,
+        p.PPI_CH17,
+        p.PPI_CH18,
+        p.PPI_CH19,
+        p.PPI_CH20,
+        p.PPI_CH21,
+        p.PPI_CH22,
+        p.PPI_CH23,
+        p.PPI_CH24,
+        p.PPI_CH25,
+        p.PPI_CH26,
+        p.PPI_CH27,
+        p.PPI_CH28,
+        p.PPI_CH29,
+        p.PPI_CH30,
+        p.PPI_CH31,
+        stack.matter().rand(),
+        Irqs,
+    );
+
+    // TODO: Share the radio peripheral between the BLE and Thread stacks
+    let (nrf_radio, nrf_radio_runner) = NrfThreadRadio::new(
+        mk_static!(NrfThreadRadioResources, NrfThreadRadioResources::new()),
+        unsafe { embassy_nrf::peripherals::RADIO::steal() },
+        Irqs,
+    );
+
+    // High-priority executor: EGU1_SWI1, priority level 6
+    interrupt::EGU1_SWI1.set_priority(Priority::P6);
+
+    // The NRF radio needs to run in a high priority executor
+    // because it is lacking hardware MAC-filtering and ACK caps,
+    // hence these are emulated in software, so low latency is crucial
+    RADIO_EXECUTOR
+        .start(interrupt::EGU1_SWI1)
+        .spawn(run_radio(nrf_radio_runner))
+        .unwrap();
 
     // == Step 4: ==
     // Our "light" on-off cluster.
@@ -144,14 +214,10 @@ async fn main(_s: Spawner) {
     //
     // This step can be repeated in that the stack can be stopped and started multiple times, as needed.
     let mut matter = pin!(stack.run(
-        // The Matter stack needs to instantiate an `openthread` Radio
-        EmbassyThread::new(
-            EspThreadRadio::new(peripherals.IEEE802154, radio_clk_ieee802154),
-            mdns_services,
-            stack
-        ),
+        // The Matter stack needs to instantiate `openthread`
+        EmbassyThread::new(nrf_radio, mdns_services, stack),
         // The Matter stack needs BLE
-        EmbassyBle::new(EspBleController::new(&init, peripherals.BT), stack),
+        EmbassyBle::new(nrf_ble_controller, stack),
         // The Matter stack needs a persister to store its state
         // `EmbassyPersist`+`EmbassyKvBlobStore` saves to a user-supplied NOR Flash region
         // However, for this demo and for simplicity, we use a dummy persister that does nothing
@@ -218,35 +284,7 @@ const NODE: Node = Node {
     ],
 };
 
-#[allow(static_mut_refs)]
-fn init_heap() {
-    fn add_region<const N: usize>(region: &'static mut MaybeUninit<[u8; N]>) {
-        unsafe {
-            esp_alloc::HEAP.add_region(esp_alloc::HeapRegion::new(
-                region.as_mut_ptr() as *mut u8,
-                N,
-                esp_alloc::MemoryCapability::Internal.into(),
-            ));
-        }
-    }
-
-    #[cfg(feature = "esp32")]
-    {
-        // The esp32 has two disjoint memory regions for heap
-        // Also, it has 64KB reserved for the BT stack in the first region, so we can't use that
-
-        static mut HEAP1: MaybeUninit<[u8; 30 * 1024]> = MaybeUninit::uninit();
-        #[link_section = ".dram2_uninit"]
-        static mut HEAP2: MaybeUninit<[u8; 96 * 1024]> = MaybeUninit::uninit();
-
-        add_region(unsafe { &mut HEAP1 });
-        add_region(unsafe { &mut HEAP2 });
-    }
-
-    #[cfg(not(feature = "esp32"))]
-    {
-        static mut HEAP: MaybeUninit<[u8; 186 * 1024]> = MaybeUninit::uninit();
-
-        add_region(unsafe { &mut HEAP });
-    }
+#[embassy_executor::task]
+async fn run_radio(mut runner: NrfThreadRadioRunner<'static, 'static>) -> ! {
+    runner.run().await
 }
