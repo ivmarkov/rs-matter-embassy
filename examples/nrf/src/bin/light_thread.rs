@@ -51,6 +51,8 @@ use rs_matter_embassy::wireless::EmbassyBle;
 
 use panic_rtt_target as _;
 
+use tinyrlibc as _;
+
 use rtt_target::rtt_init_log;
 
 macro_rules! mk_static {
