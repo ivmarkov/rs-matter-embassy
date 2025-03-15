@@ -314,11 +314,15 @@ pub mod nrf {
     use embassy_nrf::Peripheral;
     use embassy_nrf::PeripheralRef;
 
-    use nrf_sdc::mpsl::{ClockInterruptHandler, HighPrioInterruptHandler, LowPrioInterruptHandler};
-
-    use rand_core::{CryptoRng, RngCore};
+    pub use nrf_sdc::mpsl::{
+        ClockInterruptHandler as NrfBleClockInterruptHandler,
+        HighPrioInterruptHandler as NrfBleHighPrioInterruptHandler,
+        LowPrioInterruptHandler as NrfBleLowPrioInterruptHandler,
+    };
 
     use rs_matter_stack::matter::error::{Error, ErrorCode};
+    use rs_matter_stack::matter::utils::rand::Rand;
+    use rs_matter_stack::rand::MatterRngCore;
 
     use super::BleController;
 
@@ -329,19 +333,31 @@ pub mod nrf {
     /// Size of L2CAP packets
     const L2CAP_MTU: usize = 27;
 
-    struct NrfBleInterrupts;
+    struct NrfBleControllerInterrupts;
 
-    unsafe impl<T> Binding<T, LowPrioInterruptHandler> for NrfBleInterrupts where
+    unsafe impl<T> Binding<T, NrfBleLowPrioInterruptHandler> for NrfBleControllerInterrupts where
         T: interrupt::typelevel::Interrupt
     {
     }
 
-    unsafe impl Binding<interrupt::typelevel::RADIO, HighPrioInterruptHandler> for NrfBleInterrupts {}
-    unsafe impl Binding<interrupt::typelevel::TIMER0, HighPrioInterruptHandler> for NrfBleInterrupts {}
-    unsafe impl Binding<interrupt::typelevel::RTC0, HighPrioInterruptHandler> for NrfBleInterrupts {}
-    unsafe impl Binding<interrupt::typelevel::CLOCK_POWER, ClockInterruptHandler> for NrfBleInterrupts {}
+    unsafe impl Binding<interrupt::typelevel::RADIO, NrfBleHighPrioInterruptHandler>
+        for NrfBleControllerInterrupts
+    {
+    }
+    unsafe impl Binding<interrupt::typelevel::TIMER0, NrfBleHighPrioInterruptHandler>
+        for NrfBleControllerInterrupts
+    {
+    }
+    unsafe impl Binding<interrupt::typelevel::RTC0, NrfBleHighPrioInterruptHandler>
+        for NrfBleControllerInterrupts
+    {
+    }
+    unsafe impl Binding<interrupt::typelevel::CLOCK_POWER, NrfBleClockInterruptHandler>
+        for NrfBleControllerInterrupts
+    {
+    }
 
-    pub struct NrfBleController<'d, R> {
+    pub struct NrfBleController<'d> {
         _radio: PeripheralRef<'d, RADIO>,
         rtc0: PeripheralRef<'d, RTC0>,
         timer0: PeripheralRef<'d, TIMER0>,
@@ -361,13 +377,10 @@ pub mod nrf {
         ppi_ch29: PeripheralRef<'d, PPI_CH29>,
         ppi_ch30: PeripheralRef<'d, PPI_CH30>,
         ppi_ch31: PeripheralRef<'d, PPI_CH31>,
-        rng: R,
+        rand: Rand,
     }
 
-    impl<'d, R> NrfBleController<'d, R>
-    where
-        R: CryptoRng + RngCore + Send,
-    {
+    impl<'d> NrfBleController<'d> {
         #[allow(clippy::too_many_arguments)]
         pub fn new<T, I>(
             radio: impl Peripheral<P = RADIO> + 'd,
@@ -389,16 +402,16 @@ pub mod nrf {
             ppi_ch29: impl Peripheral<P = PPI_CH29> + 'd,
             ppi_ch30: impl Peripheral<P = PPI_CH30> + 'd,
             ppi_ch31: impl Peripheral<P = PPI_CH31> + 'd,
-            rng: R,
+            rand: Rand,
             _irqs: I,
         ) -> Self
         where
             T: Interrupt,
-            I: Binding<T, LowPrioInterruptHandler>
-                + Binding<interrupt::typelevel::RADIO, HighPrioInterruptHandler>
-                + Binding<interrupt::typelevel::TIMER0, HighPrioInterruptHandler>
-                + Binding<interrupt::typelevel::RTC0, HighPrioInterruptHandler>
-                + Binding<interrupt::typelevel::CLOCK_POWER, ClockInterruptHandler>,
+            I: Binding<T, NrfBleLowPrioInterruptHandler>
+                + Binding<interrupt::typelevel::RADIO, NrfBleHighPrioInterruptHandler>
+                + Binding<interrupt::typelevel::TIMER0, NrfBleHighPrioInterruptHandler>
+                + Binding<interrupt::typelevel::RTC0, NrfBleHighPrioInterruptHandler>
+                + Binding<interrupt::typelevel::CLOCK_POWER, NrfBleClockInterruptHandler>,
         {
             into_ref!(
                 radio, rtc0, timer0, temp, ppi_ch17, ppi_ch18, ppi_ch19, ppi_ch20, ppi_ch21,
@@ -426,15 +439,12 @@ pub mod nrf {
                 ppi_ch29,
                 ppi_ch30,
                 ppi_ch31,
-                rng,
+                rand,
             }
         }
     }
 
-    impl<'d, R> BleController for NrfBleController<'d, R>
-    where
-        R: CryptoRng + RngCore + Send,
-    {
+    impl<'d> BleController for NrfBleController<'d> {
         async fn run<T>(&mut self, mut task: T) -> Result<(), rs_matter_stack::matter::error::Error>
         where
             T: super::BleControllerTask,
@@ -475,11 +485,13 @@ pub mod nrf {
             let mpsl = nrf_sdc::mpsl::MultiprotocolServiceLayer::new::<
                 interrupt::typelevel::EGU0_SWI0,
                 _,
-            >(mpsl_p, NrfBleInterrupts, lfclk_cfg)
+            >(mpsl_p, NrfBleControllerInterrupts, lfclk_cfg)
             .map_err(to_matter_err)?;
 
             // TODO
             let mut sdc_mem = nrf_sdc::Mem::<3312>::new();
+
+            let mut rng = MatterRngCore::new(self.rand);
 
             let controller = nrf_sdc::Builder::new()
                 .map_err(to_matter_err)?
@@ -491,7 +503,7 @@ pub mod nrf {
                 .map_err(to_matter_err)?
                 .buffer_cfg(L2CAP_MTU as u8, L2CAP_MTU as u8, L2CAP_TXQ, L2CAP_RXQ)
                 .map_err(to_matter_err)?
-                .build(sdc_p, &mut self.rng, &mpsl, &mut sdc_mem)
+                .build(sdc_p, &mut rng, &mpsl, &mut sdc_mem)
                 .map_err(to_matter_err)?;
 
             task.run(controller).await
@@ -514,9 +526,7 @@ pub mod thread {
 
     use log::error;
 
-    use openthread::{
-        Channels, OpenThread, OtError, OtResources, OtRngCore, OtRngCoreError, Radio,
-    };
+    use openthread::{Channels, OpenThread, OtError, OtResources, Radio};
 
     use rs_matter_stack::matter::error::{Error, ErrorCode};
     use rs_matter_stack::matter::tlv::OctetsOwned;
@@ -526,6 +536,7 @@ pub mod thread {
     use rs_matter_stack::matter::utils::sync::IfMutex;
     use rs_matter_stack::mdns::MatterMdnsServices;
     use rs_matter_stack::network::{Embedding, Network};
+    use rs_matter_stack::rand::MatterRngCore;
     use rs_matter_stack::wireless::traits::{
         ConcurrencyMode, Controller, NetworkCredentials, Thread, ThreadData, ThreadId,
         ThreadScanResult, Wireless, WirelessData, WirelessTask, NC,
@@ -687,7 +698,7 @@ pub mod thread {
                     let mut resources = self.context.resources.lock().await;
                     let (ot_resources, ot_udp_resources, ot_srp_resources) = &mut *resources;
 
-                    let mut rng = OtRngCoreImpl(self.rand);
+                    let mut rng = MatterRngCore::new(self.rand);
 
                     let ot = OpenThread::new_with_udp_srp(
                         &mut rng,
@@ -876,35 +887,6 @@ pub mod thread {
         ErrorCode::NoNetworkInterface.into()
     }
 
-    /// Adapt `rs-matter`'s `Rand` to `RngCore` necessary for OpenThread
-    struct OtRngCoreImpl(Rand);
-
-    impl OtRngCore for OtRngCoreImpl {
-        fn next_u32(&mut self) -> u32 {
-            let mut bytes = [0; 4];
-            (self.0)(&mut bytes);
-
-            u32::from_ne_bytes(bytes)
-        }
-
-        fn next_u64(&mut self) -> u64 {
-            let mut bytes = [0; 8];
-            (self.0)(&mut bytes);
-
-            u64::from_ne_bytes(bytes)
-        }
-
-        fn fill_bytes(&mut self, dest: &mut [u8]) {
-            (self.0)(dest);
-        }
-
-        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), OtRngCoreError> {
-            (self.0)(dest);
-
-            Ok(())
-        }
-    }
-
     #[cfg(feature = "esp")]
     pub mod esp {
         use esp_hal::peripheral::{Peripheral, PeripheralRef};
@@ -946,6 +928,93 @@ pub mod thread {
                     unsafe { esp_hal::peripherals::IEEE802154::steal() },
                     unsafe { esp_hal::peripherals::RADIO_CLK::steal() },
                 ))
+            }
+        }
+    }
+
+    #[cfg(feature = "nrf")]
+    pub mod nrf {
+        use core::cell::Cell;
+
+        use embassy_nrf::interrupt;
+        use embassy_nrf::interrupt::typelevel::{Binding, Handler};
+        use embassy_nrf::radio::InterruptHandler;
+        use embassy_nrf::{Peripheral, PeripheralRef};
+
+        use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+        use embassy_sync::blocking_mutex::Mutex;
+
+        use openthread::nrf::Ieee802154Peripheral;
+        use openthread::nrf::NrfRadio;
+
+        use rs_matter_stack::matter::error::Error;
+
+        pub struct NrfThreadRadioInterruptHandler;
+
+        impl Handler<interrupt::typelevel::RADIO> for NrfThreadRadioInterruptHandler {
+            unsafe fn on_interrupt() {
+                if IEEE802154_ENABLED.lock(Cell::get) {
+                    // Call the IEEE 802.15.4 driver interrupt handler, if the driver is enabled
+                    InterruptHandler::<embassy_nrf::peripherals::RADIO>::on_interrupt();
+                }
+            }
+        }
+
+        static IEEE802154_ENABLED: Mutex<CriticalSectionRawMutex, Cell<bool>> =
+            Mutex::new(Cell::new(false));
+
+        struct NrfThreadRadioInterrupts;
+
+        unsafe impl
+            Binding<
+                <embassy_nrf::peripherals::RADIO as Ieee802154Peripheral>::Interrupt,
+                InterruptHandler<embassy_nrf::peripherals::RADIO>,
+            > for NrfThreadRadioInterrupts
+        {
+        }
+
+        /// A `ThreadRadio` implementation for the NRF52 family of chips.
+        pub struct NrfThreadRadio<'d, I> {
+            radio_peripheral: PeripheralRef<'d, embassy_nrf::peripherals::RADIO>,
+            _irq: I,
+        }
+
+        impl<'d, I> NrfThreadRadio<'d, I> {
+            /// Create a new instance of the `EspThreadRadioDriverProvider` type.
+            ///
+            /// # Arguments
+            /// - `peripheral` - The Thread radio peripheral instance.
+            pub fn new(
+                radio_peripheral: impl Peripheral<P = embassy_nrf::peripherals::RADIO> + 'd,
+                irq: I,
+            ) -> Self {
+                Self {
+                    radio_peripheral: radio_peripheral.into_ref(),
+                    _irq: irq,
+                }
+            }
+        }
+
+        impl<I> super::ThreadRadio for NrfThreadRadio<'_, I>
+        where
+            I: Binding<
+                <embassy_nrf::peripherals::RADIO as Ieee802154Peripheral>::Interrupt,
+                NrfThreadRadioInterruptHandler,
+            >,
+        {
+            async fn run<A>(&mut self, mut task: A) -> Result<(), Error>
+            where
+                A: super::ThreadRadioTask,
+            {
+                let _guard = scopeguard::guard((), |_| IEEE802154_ENABLED.lock(|s| s.set(false)));
+
+                IEEE802154_ENABLED.lock(|s| s.set(true));
+
+                task.run(NrfRadio::new(embassy_nrf::radio::ieee802154::Radio::new(
+                    &mut self.radio_peripheral,
+                    NrfThreadRadioInterrupts,
+                )))
+                .await
             }
         }
     }

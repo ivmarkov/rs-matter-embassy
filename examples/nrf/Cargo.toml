@@ -42,7 +42,7 @@ embassy-sync = { version = "0.6", features = ["log"] }
 embassy-usb-logger = "0.4"
 log = "0.4"
 embedded-alloc = "0.6"
-rs-matter-embassy = { path = "../../rs-matter-embassy", features = ["nrf"] }
+rs-matter-embassy = { path = "../../rs-matter-embassy", features = ["nrf", "openthread"] }
 
 cortex-m = { version = "0.7.6" }
 cortex-m-rt = "0.7.0"
@@ -52,7 +52,3 @@ panic-rtt-target = "0.2"
 
 static_cell = "2"
 portable-atomic = { version = "1.5", features = ["critical-section"] }
-
-nrf-sdc = { version = "0.1.0", default-features = false, features = ["peripheral"] }
-nrf-mpsl = { version = "0.1.0", default-features = false, features = ["critical-section-impl"] }
-bt-hci = { version = "0.2", default-features = false}

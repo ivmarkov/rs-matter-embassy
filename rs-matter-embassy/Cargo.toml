@@ -40,7 +40,7 @@ default = ["rs-matter-stack", "nrf", "embassy-net", "openthread"]
 embassy-net = ["dep:embassy-net", "dep:edge-nal-embassy"]
 esp = ["esp-wifi", "esp-hal", "openthread?/esp-ieee802154"]
 rp = ["cyw43", "cyw43-pio", "embassy-rp", "rand_core"]
-nrf = ["embassy-nrf", "rand_core", "nrf-sdc"]
+nrf = ["embassy-nrf", "rand_core", "nrf-sdc", "openthread?/embassy-nrf"]
 
 [dependencies]
 log = { version = "0.4", default-features = false }
