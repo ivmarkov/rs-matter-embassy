@@ -36,7 +36,7 @@ debug = true
 opt-level = "z"
 
 [features]
-default = ["rs-matter-stack", "nrf", "embassy-net", "openthread"]
+default = ["rs-matter-stack"]
 embassy-net = ["dep:embassy-net", "dep:edge-nal-embassy"]
 esp = ["esp-wifi", "esp-hal", "openthread?/esp-ieee802154"]
 rp = ["cyw43", "cyw43-pio", "embassy-rp", "rand_core"]

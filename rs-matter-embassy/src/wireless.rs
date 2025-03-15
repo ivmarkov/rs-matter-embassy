@@ -265,15 +265,17 @@ pub mod esp {
     use esp_wifi::ble::controller::BleConnector;
     use esp_wifi::EspWifiController;
 
+    use rs_matter_stack::matter::error::Error;
+
     const SLOTS: usize = 20;
 
-    /// A `BleControllerProvider` implementation for the ESP32 family of chips.
-    pub struct EspBleControllerProvider<'a, 'd> {
+    /// A `BleController` implementation for the ESP32 family of chips.
+    pub struct EspBleController<'a, 'd> {
         controller: &'a EspWifiController<'d>,
         peripheral: PeripheralRef<'d, esp_hal::peripherals::BT>,
     }
 
-    impl<'a, 'd> EspBleControllerProvider<'a, 'd> {
+    impl<'a, 'd> EspBleController<'a, 'd> {
         /// Create a new instance
         ///
         /// # Arguments
@@ -290,14 +292,17 @@ pub mod esp {
         }
     }
 
-    impl super::BleControllerProvider for EspBleControllerProvider<'_, '_> {
-        type Controller<'t>
-            = ExternalController<BleConnector<'t>, SLOTS>
+    impl super::BleController for EspBleController<'_, '_> {
+        async fn run<T>(&mut self, mut task: T) -> Result<(), Error>
         where
-            Self: 't;
+            T: super::BleControllerTask,
+        {
+            let controller = ExternalController::<_, SLOTS>::new(BleConnector::new(
+                self.controller,
+                &mut self.peripheral,
+            ));
 
-        async fn provide(&mut self) -> Self::Controller<'_> {
-            ExternalController::new(BleConnector::new(self.controller, &mut self.peripheral))
+            task.run(controller).await
         }
     }
 }
@@ -893,14 +898,16 @@ pub mod thread {
 
         use openthread::esp::EspRadio;
 
-        /// A `ThreadRadioProvider` implementation for the ESP32 family of chips.
-        pub struct EspThreadRadioProvider<'d> {
+        use rs_matter_stack::matter::error::Error;
+
+        /// A `ThreadRadio` implementation for the ESP32 family of chips.
+        pub struct EspThreadRadio<'d> {
             _radio_peripheral: PeripheralRef<'d, esp_hal::peripherals::IEEE802154>,
             _radio_clk_peripheral: PeripheralRef<'d, esp_hal::peripherals::RADIO_CLK>,
         }
 
-        impl<'d> EspThreadRadioProvider<'d> {
-            /// Create a new instance of the `EspThreadRadioDriverProvider` type.
+        impl<'d> EspThreadRadio<'d> {
+            /// Create a new instance of the `EspThreadRadio` type.
             ///
             /// # Arguments
             /// - `peripheral` - The Thread radio peripheral instance.
@@ -915,19 +922,19 @@ pub mod thread {
             }
         }
 
-        impl super::ThreadRadioProvider for EspThreadRadioProvider<'_> {
-            type Radio<'t>
-                = EspRadio<'t>
+        impl super::ThreadRadio for EspThreadRadio<'_> {
+            async fn run<A>(&mut self, mut task: A) -> Result<(), Error>
             where
-                Self: 't;
-
-            async fn provide(&mut self) -> Self::Radio<'_> {
+                A: super::ThreadRadioTask,
+            {
                 // See https://github.com/esp-rs/esp-hal/issues/3238
                 //EspRadio::new(openthread::esp::Ieee802154::new(&mut self.radio_peripheral, &mut self.radio_clk_peripheral))
-                EspRadio::new(openthread::esp::Ieee802154::new(
+                let radio = EspRadio::new(openthread::esp::Ieee802154::new(
                     unsafe { esp_hal::peripherals::IEEE802154::steal() },
                     unsafe { esp_hal::peripherals::RADIO_CLK::steal() },
-                ))
+                ));
+
+                task.run(radio).await
             }
         }
     }
@@ -1413,8 +1420,8 @@ pub mod wifi {
     pub mod esp {
         use esp_hal::peripheral::{Peripheral, PeripheralRef};
         use esp_wifi::wifi::{
-            AuthMethod, ClientConfiguration, Configuration, ScanConfig, WifiController, WifiDevice,
-            WifiError, WifiStaDevice,
+            AuthMethod, ClientConfiguration, Configuration, ScanConfig, WifiController, WifiError,
+            WifiStaDevice,
         };
 
         use log::{error, info};
@@ -1429,14 +1436,14 @@ pub mod wifi {
 
         const MAX_NETWORKS: usize = 3;
 
-        /// A `WifiDriverProvider` implementation for the ESP32 family of chips.
-        pub struct EspWifiDriverProvider<'a, 'd> {
+        /// A `WifiDriver` implementation for the ESP32 family of chips.
+        pub struct EspWifiDriver<'a, 'd> {
             controller: &'a esp_wifi::EspWifiController<'d>,
             peripheral: PeripheralRef<'d, esp_hal::peripherals::WIFI>,
         }
 
-        impl<'a, 'd> EspWifiDriverProvider<'a, 'd> {
-            /// Create a new instance of the `Esp32WifiDriverProvider` type.
+        impl<'a, 'd> EspWifiDriver<'a, 'd> {
+            /// Create a new instance of the `Esp32WifiDriver` type.
             ///
             /// # Arguments
             /// - `controller` - The `esp-wifi` Wifi controller instance.
@@ -1452,17 +1459,11 @@ pub mod wifi {
             }
         }
 
-        impl super::WifiDriverProvider for EspWifiDriverProvider<'_, '_> {
-            type Driver<'t>
-                = WifiDevice<'t, WifiStaDevice>
+        impl super::WifiDriver for EspWifiDriver<'_, '_> {
+            async fn run<A>(&mut self, mut task: A) -> Result<(), Error>
             where
-                Self: 't;
-            type Controller<'t>
-                = EspWifiController<'t>
-            where
-                Self: 't;
-
-            async fn provide(&mut self) -> (Self::Driver<'_>, Self::Controller<'_>) {
+                A: super::WifiDriverTask,
+            {
                 let (wifi_interface, mut controller) = esp_wifi::wifi::new_with_mode(
                     self.controller,
                     &mut self.peripheral,
@@ -1475,7 +1476,8 @@ pub mod wifi {
                     .set_power_saving(esp_wifi::config::PowerSaveMode::None)
                     .unwrap();
 
-                (wifi_interface, EspWifiController::new(controller))
+                task.run(wifi_interface, EspWifiController::new(controller))
+                    .await
             }
         }
 

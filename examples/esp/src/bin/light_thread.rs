@@ -39,8 +39,8 @@ use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
 use rs_matter_embassy::stack::MdnsType;
-use rs_matter_embassy::wireless::esp::EspBleControllerProvider;
-use rs_matter_embassy::wireless::thread::esp::EspThreadRadioProvider;
+use rs_matter_embassy::wireless::esp::EspBleController;
+use rs_matter_embassy::wireless::thread::esp::EspThreadRadio;
 use rs_matter_embassy::wireless::thread::{EmbassyThread, EmbassyThreadNCMatterStack};
 use rs_matter_embassy::wireless::EmbassyBle;
 
@@ -146,12 +146,12 @@ async fn main(_s: Spawner) {
     let mut matter = pin!(stack.run(
         // The Matter stack needs to instantiate an `openthread` Radio
         EmbassyThread::new(
-            EspThreadRadioProvider::new(peripherals.IEEE802154, radio_clk_ieee802154),
+            EspThreadRadio::new(peripherals.IEEE802154, radio_clk_ieee802154),
             mdns_services,
             stack
         ),
         // The Matter stack needs BLE
-        EmbassyBle::new(EspBleControllerProvider::new(&init, peripherals.BT), stack),
+        EmbassyBle::new(EspBleController::new(&init, peripherals.BT), stack),
         // The Matter stack needs a persister to store its state
         // `EmbassyPersist`+`EmbassyKvBlobStore` saves to a user-supplied NOR Flash region
         // However, for this demo and for simplicity, we use a dummy persister that does nothing

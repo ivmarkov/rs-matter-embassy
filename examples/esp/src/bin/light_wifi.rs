@@ -38,8 +38,8 @@ use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
 use rs_matter_embassy::stack::MdnsType;
-use rs_matter_embassy::wireless::esp::EspBleControllerProvider;
-use rs_matter_embassy::wireless::wifi::esp::EspWifiDriverProvider;
+use rs_matter_embassy::wireless::esp::EspBleController;
+use rs_matter_embassy::wireless::wifi::esp::EspWifiDriver;
 use rs_matter_embassy::wireless::wifi::{EmbassyWifi, EmbassyWifiMatterStack};
 use rs_matter_embassy::wireless::EmbassyBle;
 
@@ -141,9 +141,9 @@ async fn main(_s: Spawner) {
     // This step can be repeated in that the stack can be stopped and started multiple times, as needed.
     let mut matter = pin!(stack.run(
         // The Matter stack needs to instantiate an `embassy-net` `Driver` and `Controller`
-        EmbassyWifi::new(EspWifiDriverProvider::new(&init, peripherals.WIFI), stack),
+        EmbassyWifi::new(EspWifiDriver::new(&init, peripherals.WIFI), stack),
         // The Matter stack needs BLE
-        EmbassyBle::new(EspBleControllerProvider::new(&init, peripherals.BT), stack),
+        EmbassyBle::new(EspBleController::new(&init, peripherals.BT), stack),
         // The Matter stack needs a persister to store its state
         // `EmbassyPersist`+`EmbassyKvBlobStore` saves to a user-supplied NOR Flash region
         // However, for this demo and for simplicity, we use a dummy persister that does nothing
