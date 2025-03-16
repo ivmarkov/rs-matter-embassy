@@ -336,7 +336,7 @@ pub mod nrf {
     /// How many incoming L2CAP buffers per link
     const L2CAP_RXQ: u8 = 3;
     /// Size of L2CAP packets
-    const L2CAP_MTU: usize = 27;
+    const L2CAP_MTU: usize = 127; // TODO: 27 does not work
 
     struct NrfBleControllerInterrupts;
 
@@ -526,9 +526,10 @@ pub mod thread {
     use core::mem::MaybeUninit;
     use core::pin::pin;
 
-    use embassy_futures::select::select3;
+    use embassy_futures::select::{select, select3};
     use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 
+    use embassy_time::{Duration, Instant, Timer};
     use log::error;
 
     use openthread::{Channels, OpenThread, OtError, OtResources, Radio};
@@ -860,9 +861,23 @@ pub mod thread {
             &mut self,
             creds: &<Self::Data as WirelessData>::NetworkCredentials,
         ) -> Result<(), Error> {
+            const TIMEOUT_SECS: u64 = 20;
+
             self.0
                 .set_active_dataset_tlv(&creds.op_dataset)
-                .map_err(to_matter_err)
+                .map_err(to_matter_err)?;
+
+            let now = Instant::now();
+
+            while !self.0.net_status().role.is_connected() {
+                if now.elapsed().as_secs() > TIMEOUT_SECS {
+                    return Err(ErrorCode::NoNetworkInterface.into());
+                }
+
+                select(self.0.wait_changed(), Timer::after(Duration::from_secs(1))).await;
+            }
+
+            Ok(())
         }
 
         async fn connected_network(

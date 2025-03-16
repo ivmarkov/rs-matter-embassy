@@ -51,7 +51,7 @@ esp32s3 = ["esp-hal/esp32s3", "esp-backtrace/esp32s3", "esp-hal-embassy/esp32s3"
 
 [dependencies]
 log = "0.4"
-embassy-executor = { version = "0.7.0", features = ["task-arena-size-32768"] }
+embassy-executor = { version = "0.7.0", features = ["task-arena-size-65536"] }
 esp-backtrace = { version = "0.15", features = [ "exception-handler", "panic-handler", "println" ] }
 esp-hal = { version = "0.23.1", features = [ "unstable" ] }
 esp-hal-embassy = { version = "0.6.0" }

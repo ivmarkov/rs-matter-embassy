@@ -20,7 +20,7 @@ use rs_matter_stack::netif::{Netif, NetifConf};
 const OT_MAX_SOCKETS: usize = 1;
 
 const OT_MAX_SRP_RECORDS: usize = 4;
-const OT_SRP_BUF_SZ: usize = 128;
+const OT_SRP_BUF_SZ: usize = 512;
 
 /// A type alias for the `OtUdpResources` type configured with the minimum number of UDP socket buffers
 /// sufficient for the operation of the Matter stack
