@@ -120,7 +120,7 @@ async fn main(_s: Spawner) {
 
     // TODO
     let mut mac = [0; 6];
-    rng.fill_bytes(&mut mac);
+    RngCore::fill_bytes(&mut rng, &mut mac);
 
     // To erase generics, `Matter` takes a rand `fn` rather than a trait or a closure,
     // so we need to initialize the global `rand` fn once
