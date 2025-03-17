@@ -35,6 +35,7 @@ use rs_matter_embassy::matter::MATTER_PORT;
 use rs_matter_embassy::rand::esp::{esp_init_rand, esp_rand};
 use rs_matter_embassy::stack::mdns::MatterMdnsServices;
 use rs_matter_embassy::stack::persist::DummyPersist;
+use rs_matter_embassy::stack::rand::RngCore;
 use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
@@ -69,7 +70,11 @@ async fn main(_s: Spawner) {
     });
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
-    let rng = esp_hal::rng::Rng::new(peripherals.RNG);
+    let mut rng = esp_hal::rng::Rng::new(peripherals.RNG);
+
+    // TODO
+    let mut mac = [0; 6];
+    rng.fill_bytes(&mut mac);
 
     // To erase generics, `Matter` takes a rand `fn` rather than a trait or a closure,
     // so we need to initialize the global `rand` fn once
@@ -148,7 +153,8 @@ async fn main(_s: Spawner) {
         EmbassyThread::new(
             EspThreadRadio::new(peripherals.IEEE802154, radio_clk_ieee802154),
             mdns_services,
-            stack
+            stack,
+            mac,
         ),
         // The Matter stack needs BLE
         EmbassyBle::new(EspBleController::new(&init, peripherals.BT), stack),

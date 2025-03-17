@@ -38,6 +38,7 @@ use rs_matter_embassy::matter::MATTER_PORT;
 use rs_matter_embassy::rand::nrf::{nrf_init_rand, nrf_rand};
 use rs_matter_embassy::stack::mdns::MatterMdnsServices;
 use rs_matter_embassy::stack::persist::DummyPersist;
+use rs_matter_embassy::stack::rand::RngCore;
 use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
@@ -115,7 +116,11 @@ async fn main(_s: Spawner) {
 
     let p = embassy_nrf::init(Default::default()); // TODO: 32 kHz clock
 
-    let rng = rng::Rng::new(p.RNG, Irqs);
+    let mut rng = rng::Rng::new(p.RNG, Irqs);
+
+    // TODO
+    let mut mac = [0; 6];
+    rng.fill_bytes(&mut mac);
 
     // To erase generics, `Matter` takes a rand `fn` rather than a trait or a closure,
     // so we need to initialize the global `rand` fn once
@@ -217,7 +222,7 @@ async fn main(_s: Spawner) {
     // This step can be repeated in that the stack can be stopped and started multiple times, as needed.
     let mut matter = pin!(stack.run(
         // The Matter stack needs to instantiate `openthread`
-        EmbassyThread::new(nrf_radio, mdns_services, stack),
+        EmbassyThread::new(nrf_radio, mdns_services, stack, mac),
         // The Matter stack needs BLE
         EmbassyBle::new(nrf_ble_controller, stack),
         // The Matter stack needs a persister to store its state

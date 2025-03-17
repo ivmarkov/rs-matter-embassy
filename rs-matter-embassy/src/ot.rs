@@ -1,9 +1,12 @@
 //! Network interface: `OtNetif` - a `Netif` trait implementation for `openthread`
 //! mDNS impl: `OtMdns` - an mDNS trait implementation for `openthread` using Thread SRP
 
+use core::fmt::Write;
 use core::net::{Ipv4Addr, Ipv6Addr};
 
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+
+use log::info;
 
 use openthread::{
     OpenThread, OtError, OtSrpResources, OtUdpResources, SrpConf, SrpService, SrpServiceId,
@@ -31,12 +34,12 @@ pub type OtMatterUdpResources = OtUdpResources<OT_MAX_SOCKETS, MAX_RX_PACKET_SIZ
 pub type OtMatterSrpResources = OtSrpResources<OT_MAX_SRP_RECORDS, OT_SRP_BUF_SZ>;
 
 /// A `Netif` trait implementation for `openthread`
-pub struct OtNetif<'d>(OpenThread<'d>);
+pub struct OtNetif<'d>(OpenThread<'d>, [u8; 6]);
 
 impl<'d> OtNetif<'d> {
     /// Create a new `OtNetif` instance
-    pub const fn new(ot: OpenThread<'d>) -> Self {
-        Self(ot)
+    pub const fn new(ot: OpenThread<'d>, mac: [u8; 6]) -> Self {
+        Self(ot, mac)
     }
 
     fn get_conf(&self) -> Option<NetifConf> {
@@ -46,7 +49,9 @@ impl<'d> OtNetif<'d> {
             let mut ipv6 = Ipv6Addr::UNSPECIFIED;
 
             let _ = self.0.ipv6_addrs(|addr| {
-                if let Some((addr, _)) = addr {
+                if let Some((addr, prefix)) = addr {
+                    info!("Got addr {addr}/{prefix}");
+
                     if ipv6.is_unspecified()
                         || ipv6.is_unicast_link_local()
                         || ipv6.is_unique_local()
@@ -61,11 +66,27 @@ impl<'d> OtNetif<'d> {
                 Ok(())
             });
 
+            self.0
+                .srp_conf(|conf, state| {
+                    info!("SRP conf: {conf:?}, state: {state:?}");
+
+                    Ok(())
+                })
+                .unwrap();
+
+            self.0
+                .srp_services(|service| {
+                    if let Some((service, state, id)) = service {
+                        info!("SRP service: {service:?}, state: {state}, id: {id}");
+                    }
+                })
+                .unwrap();
+
             let conf = NetifConf {
                 ipv4: Ipv4Addr::UNSPECIFIED,
                 ipv6,
                 interface: 0,
-                mac: [0, 0, 0, 0, 0, 0], // TODO
+                mac: self.1,
             };
 
             Some(conf)
@@ -94,6 +115,7 @@ impl Netif for OtNetif<'_> {
 pub struct OtMdns<'d> {
     ot: OpenThread<'d>,
     services: &'d MatterMdnsServices<'d, NoopRawMutex>,
+    mac: [u8; 6],
 }
 
 impl<'d> OtMdns<'d> {
@@ -101,26 +123,32 @@ impl<'d> OtMdns<'d> {
     pub fn new(
         ot: OpenThread<'d>,
         services: &'d MatterMdnsServices<'d, NoopRawMutex>,
+        mac: [u8; 6],
     ) -> Result<Self, OtError> {
-        ot.srp_set_conf(&SrpConf {
-            host_name: "todo",
-            ..Default::default()
-        })?;
-
-        ot.srp_autostart()?;
-
-        Ok(Self { ot, services })
+        Ok(Self { ot, services, mac })
     }
 
     pub async fn run(&self) -> Result<(), OtError> {
+        self.services.broadcast_signal().reset();
+
         loop {
-            self.services.broadcast_signal().wait().await;
-
             // TODO: Not very efficient to remove and re-add everything
-
             while let Some(service_id) = self.get_one()? {
                 self.ot.srp_remove_service(service_id, true)?;
             }
+
+            let mut hostname = heapless::String::<12>::new();
+            write!(
+                hostname,
+                "{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
+                self.mac[0], self.mac[1], self.mac[2], self.mac[3], self.mac[4], self.mac[5]
+            )
+            .unwrap();
+
+            self.ot.srp_set_conf(&SrpConf {
+                host_name: hostname.as_str(),
+                ..Default::default()
+            })?;
 
             self.services
                 .visit_services(|matter_mode, matter_service| {
@@ -149,6 +177,8 @@ impl<'d> OtMdns<'d> {
                     Ok(())
                 })
                 .unwrap();
+
+            self.services.broadcast_signal().wait().await;
         }
     }
 

@@ -636,6 +636,7 @@ pub mod thread {
         mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
         context: &'a OtNetContext,
         rand: Rand,
+        mac: [u8; 6],
     }
 
     impl<'a, T> EmbassyThread<'a, T>
@@ -647,6 +648,7 @@ pub mod thread {
             provider: T,
             mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
             stack: &'a EmbassyWirelessMatterStack<'a, Thread<M>, OtNetContext, E>,
+            mac: [u8; 6],
         ) -> Self
         where
             M: ConcurrencyMode,
@@ -657,6 +659,7 @@ pub mod thread {
                 mdns_services,
                 stack.network().embedding().embedding().net_context(),
                 stack.matter().rand(),
+                mac,
             )
         }
 
@@ -666,12 +669,14 @@ pub mod thread {
             mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
             context: &'a OtNetContext,
             rand: Rand,
+            mac: [u8; 6],
         ) -> Self {
             Self {
                 provider,
                 mdns_services,
                 context,
                 rand,
+                mac,
             }
         }
     }
@@ -694,6 +699,7 @@ pub mod thread {
                 mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
                 context: &'a OtNetContext,
                 rand: Rand,
+                mac: [u8; 6],
                 task: A,
             }
 
@@ -719,8 +725,9 @@ pub mod thread {
                     .map_err(to_matter_err)?;
 
                     let controller = OtController(ot);
-                    let netif = OtNetif::new(ot);
-                    let mdns = OtMdns::new(ot, self.mdns_services).map_err(to_matter_err)?;
+                    let netif = OtNetif::new(ot, self.mac);
+                    let mdns =
+                        OtMdns::new(ot, self.mdns_services, self.mac).map_err(to_matter_err)?;
 
                     let mut main = pin!(self.task.run(netif, ot, controller));
                     let mut radio = pin!(async {
@@ -731,13 +738,13 @@ pub mod thread {
                     let mut mdns = pin!(async { mdns.run().await.map_err(to_matter_err) });
 
                     ot.enable_ipv6(true).map_err(to_matter_err)?;
-                    ot.enable_thread(true).map_err(to_matter_err)?;
                     ot.srp_autostart().map_err(to_matter_err)?;
 
                     let result = select3(&mut main, &mut radio, &mut mdns).coalesce().await;
 
-                    let _ = ot.enable_thread(false).map_err(to_matter_err);
-                    let _ = ot.enable_ipv6(false).map_err(to_matter_err);
+                    let _ = ot.enable_thread(false);
+                    let _ = ot.srp_stop();
+                    let _ = ot.enable_ipv6(false);
 
                     result
                 }
@@ -748,6 +755,7 @@ pub mod thread {
                     mdns_services: self.mdns_services,
                     context: self.context,
                     rand: self.rand,
+                    mac: self.mac,
                     task,
                 })
                 .await
@@ -863,14 +871,20 @@ pub mod thread {
         ) -> Result<(), Error> {
             const TIMEOUT_SECS: u64 = 20;
 
+            let _ = self.0.enable_thread(false);
+
             self.0
                 .set_active_dataset_tlv(&creds.op_dataset)
                 .map_err(to_matter_err)?;
+
+            self.0.enable_thread(true).map_err(to_matter_err)?;
 
             let now = Instant::now();
 
             while !self.0.net_status().role.is_connected() {
                 if now.elapsed().as_secs() > TIMEOUT_SECS {
+                    let _ = self.0.enable_thread(false);
+
                     return Err(ErrorCode::NoNetworkInterface.into());
                 }
 
