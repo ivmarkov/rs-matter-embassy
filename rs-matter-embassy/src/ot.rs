@@ -8,9 +8,7 @@ use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 
 use log::info;
 
-use openthread::{
-    OpenThread, OtError, OtSrpResources, OtUdpResources, SrpConf, SrpService, SrpServiceId,
-};
+use openthread::{OpenThread, OtError, OtSrpResources, OtUdpResources, SrpConf, SrpService};
 
 use rs_matter_stack::matter::error::Error;
 use rs_matter_stack::matter::mdns::ServiceMode;
@@ -67,8 +65,8 @@ impl<'d> OtNetif<'d> {
             });
 
             self.0
-                .srp_conf(|conf, state| {
-                    info!("SRP conf: {conf:?}, state: {state:?}");
+                .srp_conf(|conf, state, empty| {
+                    info!("SRP conf: {conf:?}, state: {state}, empty: {empty}");
 
                     Ok(())
                 })
@@ -76,8 +74,8 @@ impl<'d> OtNetif<'d> {
 
             self.0
                 .srp_services(|service| {
-                    if let Some((service, state, id)) = service {
-                        info!("SRP service: {service:?}, state: {state}, id: {id}");
+                    if let Some((service, state, slot)) = service {
+                        info!("SRP service: {service:?}, state: {state}, slot: {slot}");
                     }
                 })
                 .unwrap();
@@ -133,8 +131,11 @@ impl<'d> OtMdns<'d> {
 
         loop {
             // TODO: Not very efficient to remove and re-add everything
-            while let Some(service_id) = self.get_one()? {
-                self.ot.srp_remove_service(service_id, true)?;
+            let _ = self.ot.srp_remove_all(false);
+
+            while !self.ot.srp_is_empty()? {
+                info!("Waiting for SRP records to be removed...");
+                self.ot.srp_wait_changed().await;
             }
 
             let mut hostname = heapless::String::<12>::new();
@@ -150,16 +151,20 @@ impl<'d> OtMdns<'d> {
                 ..Default::default()
             })?;
 
+            info!("Registered SRP host {hostname}");
+
             self.services
                 .visit_services(|matter_mode, matter_service| {
+                    let instance_name = if matches!(matter_mode, ServiceMode::Commissioned) {
+                        "_matter._tcp"
+                    } else {
+                        "_matterc._udp"
+                    };
+
                     self.ot
                         .srp_add_service(&SrpService {
                             name: matter_service.name,
-                            instance_name: if matches!(matter_mode, ServiceMode::Commissioned) {
-                                "_matter._tcp"
-                            } else {
-                                "_matterc._udp"
-                            },
+                            instance_name,
                             port: matter_service.port,
                             subtype_labels: matter_service.service_subtypes.iter().cloned(),
                             txt_entries: matter_service
@@ -174,22 +179,16 @@ impl<'d> OtMdns<'d> {
                         })
                         .unwrap(); // TODO
 
+                    info!(
+                        "Added service {} of type {instance_name}",
+                        matter_service.name
+                    );
+
                     Ok(())
                 })
                 .unwrap();
 
             self.services.broadcast_signal().wait().await;
         }
-    }
-
-    fn get_one(&self) -> Result<Option<SrpServiceId>, OtError> {
-        let mut id = None;
-        self.ot.srp_services(|service| {
-            if let Some((_, _, service_id)) = service {
-                id = Some(service_id);
-            }
-        })?;
-
-        Ok(id)
     }
 }
