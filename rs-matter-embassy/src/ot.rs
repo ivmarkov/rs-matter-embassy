@@ -4,8 +4,10 @@
 use core::fmt::Write;
 use core::net::{Ipv4Addr, Ipv6Addr};
 
+use embassy_futures::select::select;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 
+use embassy_time::{Duration, Timer};
 use log::info;
 
 use openthread::{
@@ -51,6 +53,12 @@ impl OtMatterResources {
             udp: OtUdpResources::new(),
             srp: OtSrpResources::new(),
         })
+    }
+}
+
+impl Default for OtMatterResources {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -156,9 +164,15 @@ impl<'d> OtMdns<'d> {
             // TODO: Not very efficient to remove and re-add everything
             let _ = self.ot.srp_remove_all(false);
 
+            // TODO: Something is still not quite right with the SRP
+            // We seem to get stuck here
             while !self.ot.srp_is_empty()? {
                 info!("Waiting for SRP records to be removed...");
-                self.ot.srp_wait_changed().await;
+                select(
+                    Timer::after(Duration::from_secs(1)),
+                    self.ot.srp_wait_changed(),
+                )
+                .await;
             }
 
             let mut hostname = heapless::String::<12>::new();
@@ -178,7 +192,7 @@ impl<'d> OtMdns<'d> {
 
             self.services
                 .visit_services(|matter_mode, matter_service| {
-                    let instance_name = if matches!(matter_mode, ServiceMode::Commissioned) {
+                    let name = if matches!(matter_mode, ServiceMode::Commissioned) {
                         "_matter._tcp"
                     } else {
                         "_matterc._udp"
@@ -186,14 +200,15 @@ impl<'d> OtMdns<'d> {
 
                     self.ot
                         .srp_add_service(&SrpService {
-                            name: matter_service.name,
-                            instance_name,
+                            name,
+                            instance_name: matter_service.name,
                             port: matter_service.port,
                             subtype_labels: matter_service.service_subtypes.iter().cloned(),
                             txt_entries: matter_service
                                 .txt_kvs
                                 .iter()
                                 .cloned()
+                                .filter(|(k, _)| !k.is_empty())
                                 .map(|(k, v)| (k, v.as_bytes())),
                             priority: 0,
                             weight: 0,
@@ -202,10 +217,7 @@ impl<'d> OtMdns<'d> {
                         })
                         .unwrap(); // TODO
 
-                    info!(
-                        "Added service {} of type {instance_name}",
-                        matter_service.name
-                    );
+                    info!("Added service {} of type {name}", matter_service.name);
 
                     Ok(())
                 })
