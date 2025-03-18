@@ -32,10 +32,11 @@ use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
 use rs_matter_embassy::matter::MATTER_PORT;
+use rs_matter_embassy::ot::OtMatterResources;
 use rs_matter_embassy::rand::esp::{esp_init_rand, esp_rand};
 use rs_matter_embassy::stack::mdns::MatterMdnsServices;
 use rs_matter_embassy::stack::persist::DummyPersist;
-use rs_matter_embassy::stack::rand::RngCore;
+use rs_matter_embassy::stack::rand::{MatterRngCore, RngCore};
 use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
@@ -148,14 +149,19 @@ async fn main(_s: Spawner) {
     // not being very intelligent w.r.t. stack usage in async functions
     //
     // This step can be repeated in that the stack can be stopped and started multiple times, as needed.
+    let mut ot_rng = MatterRngCore::new(stack.matter().rand());
+    let ot_resources = &mut *Box::leak(Box::new_uninit()).init_with(OtMatterResources::init());
+
     let mut matter = pin!(stack.run(
         // The Matter stack needs to instantiate an `openthread` Radio
         EmbassyThread::new(
             EspThreadRadio::new(peripherals.IEEE802154, radio_clk_ieee802154),
             mdns_services,
-            stack,
+            ot_resources,
+            &mut ot_rng,
             mac,
-        ),
+        )
+        .unwrap(),
         // The Matter stack needs BLE
         EmbassyBle::new(EspBleController::new(&init, peripherals.BT), stack),
         // The Matter stack needs a persister to store its state

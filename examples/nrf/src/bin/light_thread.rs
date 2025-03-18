@@ -35,10 +35,11 @@ use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
 use rs_matter_embassy::matter::MATTER_PORT;
+use rs_matter_embassy::ot::OtMatterResources;
 use rs_matter_embassy::rand::nrf::{nrf_init_rand, nrf_rand};
 use rs_matter_embassy::stack::mdns::MatterMdnsServices;
 use rs_matter_embassy::stack::persist::DummyPersist;
-use rs_matter_embassy::stack::rand::RngCore;
+use rs_matter_embassy::stack::rand::{MatterRngCore, RngCore};
 use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
@@ -220,9 +221,11 @@ async fn main(_s: Spawner) {
     // not being very intelligent w.r.t. stack usage in async functions
     //
     // This step can be repeated in that the stack can be stopped and started multiple times, as needed.
+    let mut ot_rng = MatterRngCore::new(stack.matter().rand());
+    let ot_resources = mk_static!(OtMatterResources).init_with(OtMatterResources::init());
     let mut matter = pin!(stack.run(
         // The Matter stack needs to instantiate `openthread`
-        EmbassyThread::new(nrf_radio, mdns_services, stack, mac),
+        EmbassyThread::new(nrf_radio, mdns_services, ot_resources, &mut ot_rng, mac,).unwrap(),
         // The Matter stack needs BLE
         EmbassyBle::new(nrf_ble_controller, stack),
         // The Matter stack needs a persister to store its state

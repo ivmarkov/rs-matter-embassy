@@ -8,11 +8,14 @@ use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 
 use log::info;
 
-use openthread::{OpenThread, OtError, OtSrpResources, OtUdpResources, SrpConf, SrpService};
+use openthread::{
+    OpenThread, OtError, OtResources, OtSrpResources, OtUdpResources, SrpConf, SrpService,
+};
 
 use rs_matter_stack::matter::error::Error;
 use rs_matter_stack::matter::mdns::ServiceMode;
 use rs_matter_stack::matter::transport::network::MAX_RX_PACKET_SIZE;
+use rs_matter_stack::matter::utils::init::{init, Init};
 use rs_matter_stack::mdns::MatterMdnsServices;
 use rs_matter_stack::netif::{Netif, NetifConf};
 
@@ -23,13 +26,33 @@ const OT_MAX_SOCKETS: usize = 1;
 const OT_MAX_SRP_RECORDS: usize = 4;
 const OT_SRP_BUF_SZ: usize = 512;
 
-/// A type alias for the `OtUdpResources` type configured with the minimum number of UDP socket buffers
-/// sufficient for the operation of the Matter stack
-pub type OtMatterUdpResources = OtUdpResources<OT_MAX_SOCKETS, MAX_RX_PACKET_SIZE>;
+/// A struct that holds all the resources required by the OpenThread stack,
+/// as used by Matter.
+pub struct OtMatterResources {
+    pub(crate) ot: OtResources,
+    pub(crate) udp: OtUdpResources<OT_MAX_SOCKETS, MAX_RX_PACKET_SIZE>,
+    pub(crate) srp: OtSrpResources<OT_MAX_SRP_RECORDS, OT_SRP_BUF_SZ>,
+}
 
-/// A type alias for the `OtSrpResources` type configured with the minimum number of SRP record buffers
-/// sufficient for the operation of the Matter stack
-pub type OtMatterSrpResources = OtSrpResources<OT_MAX_SRP_RECORDS, OT_SRP_BUF_SZ>;
+impl OtMatterResources {
+    /// Create a new `OtMatterResources` instance
+    pub const fn new() -> Self {
+        Self {
+            ot: OtResources::new(),
+            udp: OtUdpResources::new(),
+            srp: OtSrpResources::new(),
+        }
+    }
+
+    /// Return an in-place initializer for `OtMatterResources`
+    pub fn init() -> impl Init<Self> {
+        init!(Self {
+            ot: OtResources::new(),
+            udp: OtUdpResources::new(),
+            srp: OtSrpResources::new(),
+        })
+    }
+}
 
 /// A `Netif` trait implementation for `openthread`
 pub struct OtNetif<'d>(OpenThread<'d>, [u8; 6]);
@@ -75,7 +98,7 @@ impl<'d> OtNetif<'d> {
             self.0
                 .srp_services(|service| {
                     if let Some((service, state, slot)) = service {
-                        info!("SRP service: {service:?}, state: {state}, slot: {slot}");
+                        info!("SRP service: {service}, state: {state}, slot: {slot}");
                     }
                 })
                 .unwrap();

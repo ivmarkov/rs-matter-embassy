@@ -523,32 +523,29 @@ pub mod nrf {
 // Thread: Type aliases and state structs for an Embassy Matter stack running over a Thread network and BLE.
 #[cfg(feature = "openthread")]
 pub mod thread {
-    use core::mem::MaybeUninit;
     use core::pin::pin;
 
     use embassy_futures::select::{select, select3};
-    use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
+    use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 
     use embassy_time::{Duration, Instant, Timer};
     use log::error;
 
-    use openthread::{Channels, OpenThread, OtError, OtResources, Radio};
+    use openthread::{Channels, OpenThread, OtError, Radio};
 
     use rs_matter_stack::matter::error::{Error, ErrorCode};
     use rs_matter_stack::matter::tlv::OctetsOwned;
     use rs_matter_stack::matter::utils::init::{init, Init};
-    use rs_matter_stack::matter::utils::rand::Rand;
     use rs_matter_stack::matter::utils::select::Coalesce;
-    use rs_matter_stack::matter::utils::sync::IfMutex;
     use rs_matter_stack::mdns::MatterMdnsServices;
-    use rs_matter_stack::network::{Embedding, Network};
+    use rs_matter_stack::network::Embedding;
     use rs_matter_stack::rand::MatterRngCore;
     use rs_matter_stack::wireless::traits::{
-        ConcurrencyMode, Controller, NetworkCredentials, Thread, ThreadData, ThreadId,
-        ThreadScanResult, Wireless, WirelessData, WirelessTask, NC,
+        Controller, NetworkCredentials, Thread, ThreadData, ThreadId, ThreadScanResult, Wireless,
+        WirelessData, WirelessTask, NC,
     };
 
-    use crate::ot::{OtMatterSrpResources, OtMatterUdpResources, OtMdns, OtNetif};
+    use crate::ot::{OtMatterResources, OtMdns, OtNetif};
 
     use super::EmbassyWirelessMatterStack;
 
@@ -634,8 +631,7 @@ pub mod thread {
     pub struct EmbassyThread<'a, T> {
         provider: T,
         mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
-        context: &'a OtNetContext,
-        rand: Rand,
+        ot: OpenThread<'a>,
         mac: [u8; 6],
     }
 
@@ -644,40 +640,26 @@ pub mod thread {
         T: ThreadRadio,
     {
         /// Create a new instance of the `EmbassyThread` type.
-        pub fn new<E, M>(
+        pub fn new(
             provider: T,
             mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
-            stack: &'a EmbassyWirelessMatterStack<'a, Thread<M>, OtNetContext, E>,
+            resources: &'a mut OtMatterResources,
+            rng: &'a mut MatterRngCore,
             mac: [u8; 6],
-        ) -> Self
-        where
-            M: ConcurrencyMode,
-            E: Embedding + 'static,
-        {
-            Self::wrap(
-                provider,
-                mdns_services,
-                stack.network().embedding().embedding().net_context(),
-                stack.matter().rand(),
-                mac,
-            )
-        }
+        ) -> Result<Self, OtError> {
+            let ot = OpenThread::new_with_udp_srp(
+                rng,
+                &mut resources.ot,
+                &mut resources.udp,
+                &mut resources.srp,
+            )?;
 
-        /// Wrap the `EmbassyThread` type around a Thread driver provider and a network context.
-        pub const fn wrap(
-            provider: T,
-            mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
-            context: &'a OtNetContext,
-            rand: Rand,
-            mac: [u8; 6],
-        ) -> Self {
-            Self {
+            Ok(Self {
                 provider,
                 mdns_services,
-                context,
-                rand,
+                ot,
                 mac,
-            }
+            })
         }
     }
 
@@ -697,8 +679,7 @@ pub mod thread {
 
             struct ThreadRadioTaskImpl<'a, A> {
                 mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
-                context: &'a OtNetContext,
-                rand: Rand,
+                ot: OpenThread<'a>,
                 mac: [u8; 6],
                 task: A,
             }
@@ -711,40 +692,27 @@ pub mod thread {
                 where
                     R: Radio,
                 {
-                    let mut resources = self.context.resources.lock().await;
-                    let (ot_resources, ot_udp_resources, ot_srp_resources) = &mut *resources;
+                    let controller = OtController(self.ot);
+                    let netif = OtNetif::new(self.ot, self.mac);
+                    let mdns = OtMdns::new(self.ot, self.mdns_services, self.mac)
+                        .map_err(to_matter_err)?;
 
-                    let mut rng = MatterRngCore::new(self.rand);
-
-                    let ot = OpenThread::new_with_udp_srp(
-                        &mut rng,
-                        ot_resources,
-                        ot_udp_resources,
-                        ot_srp_resources,
-                    )
-                    .map_err(to_matter_err)?;
-
-                    let controller = OtController(ot);
-                    let netif = OtNetif::new(ot, self.mac);
-                    let mdns =
-                        OtMdns::new(ot, self.mdns_services, self.mac).map_err(to_matter_err)?;
-
-                    let mut main = pin!(self.task.run(netif, ot, controller));
+                    let mut main = pin!(self.task.run(netif, self.ot, controller));
                     let mut radio = pin!(async {
-                        ot.run(radio).await;
+                        self.ot.run(radio).await;
                         #[allow(unreachable_code)]
                         Ok(())
                     });
                     let mut mdns = pin!(async { mdns.run().await.map_err(to_matter_err) });
 
-                    ot.enable_ipv6(true).map_err(to_matter_err)?;
-                    ot.srp_autostart().map_err(to_matter_err)?;
+                    self.ot.enable_ipv6(true).map_err(to_matter_err)?;
+                    self.ot.srp_autostart().map_err(to_matter_err)?;
 
                     let result = select3(&mut main, &mut radio, &mut mdns).coalesce().await;
 
-                    let _ = ot.enable_thread(false);
-                    let _ = ot.srp_stop();
-                    let _ = ot.enable_ipv6(false);
+                    let _ = self.ot.enable_thread(false);
+                    let _ = self.ot.srp_stop();
+                    let _ = self.ot.enable_ipv6(false);
 
                     result
                 }
@@ -753,8 +721,7 @@ pub mod thread {
             self.provider
                 .run(ThreadRadioTaskImpl {
                     mdns_services: self.mdns_services,
-                    context: self.context,
-                    rand: self.rand,
+                    ot: self.ot,
                     mac: self.mac,
                     task,
                 })
@@ -762,35 +729,20 @@ pub mod thread {
         }
     }
 
+    /// A network context for the `EmbassyThread` type.
     pub struct OtNetContext {
-        resources: IfMutex<
-            CriticalSectionRawMutex,
-            (OtResources, OtMatterUdpResources, OtMatterSrpResources),
-        >,
+        _resources: (),
     }
 
     impl OtNetContext {
         /// Create a new instance of the `OtNetContext` type.
         pub const fn new() -> Self {
-            Self {
-                resources: IfMutex::new((
-                    OtResources::new(),
-                    OtMatterUdpResources::new(),
-                    OtMatterSrpResources::new(),
-                )),
-            }
+            Self { _resources: () }
         }
 
         /// Return an in-place initializer for the `OtNetContext` type.
         pub fn init() -> impl Init<Self> {
-            init!(Self {
-                // Note: below will break if `Ot*Resources` stop being a bunch of `MaybeUninit`s
-                resources <- IfMutex::init((
-                    unsafe { MaybeUninit::<OtResources>::uninit().assume_init() },
-                    unsafe { MaybeUninit::<OtMatterUdpResources>::uninit().assume_init() },
-                    unsafe { MaybeUninit::<OtMatterSrpResources>::uninit().assume_init() },
-                )),
-            })
+            init!(Self { _resources: () })
         }
     }
 
