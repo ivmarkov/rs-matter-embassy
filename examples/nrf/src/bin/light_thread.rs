@@ -120,8 +120,8 @@ async fn main(_s: Spawner) {
     let mut rng = rng::Rng::new(p.RNG, Irqs);
 
     // TODO
-    let mut mac = [0; 6];
-    RngCore::fill_bytes(&mut rng, &mut mac);
+    let mut ieee_eui64 = [0; 8];
+    RngCore::fill_bytes(&mut rng, &mut ieee_eui64);
 
     // To erase generics, `Matter` takes a rand `fn` rather than a trait or a closure,
     // so we need to initialize the global `rand` fn once
@@ -225,7 +225,14 @@ async fn main(_s: Spawner) {
     let ot_resources = mk_static!(OtMatterResources).init_with(OtMatterResources::init());
     let mut matter = pin!(stack.run(
         // The Matter stack needs to instantiate `openthread`
-        EmbassyThread::new(nrf_radio, mdns_services, ot_resources, &mut ot_rng, mac,).unwrap(),
+        EmbassyThread::new(
+            nrf_radio,
+            mdns_services,
+            ot_resources,
+            ieee_eui64,
+            &mut ot_rng
+        )
+        .unwrap(),
         // The Matter stack needs BLE
         EmbassyBle::new(nrf_ble_controller, stack),
         // The Matter stack needs a persister to store its state

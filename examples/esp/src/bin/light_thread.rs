@@ -74,8 +74,8 @@ async fn main(_s: Spawner) {
     let mut rng = esp_hal::rng::Rng::new(peripherals.RNG);
 
     // TODO
-    let mut mac = [0; 6];
-    rng.fill_bytes(&mut mac);
+    let mut ieee_eui64 = [0; 8];
+    rng.fill_bytes(&mut ieee_eui64);
 
     // To erase generics, `Matter` takes a rand `fn` rather than a trait or a closure,
     // so we need to initialize the global `rand` fn once
@@ -158,8 +158,8 @@ async fn main(_s: Spawner) {
             EspThreadRadio::new(peripherals.IEEE802154, radio_clk_ieee802154),
             mdns_services,
             ot_resources,
+            ieee_eui64,
             &mut ot_rng,
-            mac,
         )
         .unwrap(),
         // The Matter stack needs BLE

@@ -63,12 +63,12 @@ impl Default for OtMatterResources {
 }
 
 /// A `Netif` trait implementation for `openthread`
-pub struct OtNetif<'d>(OpenThread<'d>, [u8; 6]);
+pub struct OtNetif<'d>(OpenThread<'d>);
 
 impl<'d> OtNetif<'d> {
     /// Create a new `OtNetif` instance
-    pub const fn new(ot: OpenThread<'d>, mac: [u8; 6]) -> Self {
-        Self(ot, mac)
+    pub const fn new(ot: OpenThread<'d>) -> Self {
+        Self(ot)
     }
 
     fn get_conf(&self) -> Option<NetifConf> {
@@ -115,7 +115,8 @@ impl<'d> OtNetif<'d> {
                 ipv4: Ipv4Addr::UNSPECIFIED,
                 ipv6,
                 interface: 0,
-                mac: self.1,
+                // TODO: Fix this in `rs-matter-stack`
+                mac: self.0.ieee_eui64()[..6].try_into().unwrap(),
             };
 
             Some(conf)
@@ -144,7 +145,6 @@ impl Netif for OtNetif<'_> {
 pub struct OtMdns<'d> {
     ot: OpenThread<'d>,
     services: &'d MatterMdnsServices<'d, NoopRawMutex>,
-    mac: [u8; 6],
 }
 
 impl<'d> OtMdns<'d> {
@@ -152,9 +152,8 @@ impl<'d> OtMdns<'d> {
     pub fn new(
         ot: OpenThread<'d>,
         services: &'d MatterMdnsServices<'d, NoopRawMutex>,
-        mac: [u8; 6],
     ) -> Result<Self, OtError> {
-        Ok(Self { ot, services, mac })
+        Ok(Self { ot, services })
     }
 
     pub async fn run(&self) -> Result<(), OtError> {
@@ -175,11 +174,20 @@ impl<'d> OtMdns<'d> {
                 .await;
             }
 
-            let mut hostname = heapless::String::<12>::new();
+            let ieee_eui64 = self.ot.ieee_eui64();
+
+            let mut hostname = heapless::String::<16>::new();
             write!(
                 hostname,
-                "{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
-                self.mac[0], self.mac[1], self.mac[2], self.mac[3], self.mac[4], self.mac[5]
+                "{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
+                ieee_eui64[0],
+                ieee_eui64[1],
+                ieee_eui64[2],
+                ieee_eui64[3],
+                ieee_eui64[4],
+                ieee_eui64[5],
+                ieee_eui64[6],
+                ieee_eui64[7]
             )
             .unwrap();
 

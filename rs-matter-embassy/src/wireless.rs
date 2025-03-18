@@ -632,7 +632,6 @@ pub mod thread {
         provider: T,
         mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
         ot: OpenThread<'a>,
-        mac: [u8; 6],
     }
 
     impl<'a, T> EmbassyThread<'a, T>
@@ -644,10 +643,11 @@ pub mod thread {
             provider: T,
             mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
             resources: &'a mut OtMatterResources,
+            ieee_eui64: [u8; 8],
             rng: &'a mut MatterRngCore,
-            mac: [u8; 6],
         ) -> Result<Self, OtError> {
             let ot = OpenThread::new_with_udp_srp(
+                ieee_eui64,
                 rng,
                 &mut resources.ot,
                 &mut resources.udp,
@@ -658,7 +658,6 @@ pub mod thread {
                 provider,
                 mdns_services,
                 ot,
-                mac,
             })
         }
     }
@@ -680,7 +679,6 @@ pub mod thread {
             struct ThreadRadioTaskImpl<'a, A> {
                 mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
                 ot: OpenThread<'a>,
-                mac: [u8; 6],
                 task: A,
             }
 
@@ -693,9 +691,8 @@ pub mod thread {
                     R: Radio,
                 {
                     let controller = OtController(self.ot);
-                    let netif = OtNetif::new(self.ot, self.mac);
-                    let mdns = OtMdns::new(self.ot, self.mdns_services, self.mac)
-                        .map_err(to_matter_err)?;
+                    let netif = OtNetif::new(self.ot);
+                    let mdns = OtMdns::new(self.ot, self.mdns_services).map_err(to_matter_err)?;
 
                     let mut main = pin!(self.task.run(netif, self.ot, controller));
                     let mut radio = pin!(async {
@@ -722,7 +719,6 @@ pub mod thread {
                 .run(ThreadRadioTaskImpl {
                     mdns_services: self.mdns_services,
                     ot: self.ot,
-                    mac: self.mac,
                     task,
                 })
                 .await
