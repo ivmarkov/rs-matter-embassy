@@ -329,14 +329,14 @@ pub mod nrf {
     use rs_matter_stack::matter::utils::rand::Rand;
     use rs_matter_stack::rand::MatterRngCore;
 
+    use crate::ble::MAX_MTU_SIZE;
+
     use super::BleController;
 
     /// How many outgoing L2CAP buffers per link
     const L2CAP_TXQ: u8 = 3;
     /// How many incoming L2CAP buffers per link
     const L2CAP_RXQ: u8 = 3;
-    /// Size of L2CAP packets
-    const L2CAP_MTU: usize = 127; // TODO: 27 does not work
 
     struct NrfBleControllerInterrupts;
 
@@ -494,7 +494,8 @@ pub mod nrf {
             .map_err(to_matter_err)?;
 
             // TODO: Externalize as resources
-            let mut sdc_mem = nrf_sdc::Mem::<3312>::new();
+            // Mem is roughly MAC_CONNECTIONS * MAX_MTU_SIZE * L2CAP_TXQ * L2CAP_RXQ
+            let mut sdc_mem = nrf_sdc::Mem::<3084>::new();
 
             let mut rng = MatterRngCore::new(self.rand);
 
@@ -506,7 +507,7 @@ pub mod nrf {
                 .map_err(to_matter_err)?
                 .peripheral_count(1)
                 .map_err(to_matter_err)?
-                .buffer_cfg(L2CAP_MTU as u8, L2CAP_MTU as u8, L2CAP_TXQ, L2CAP_RXQ)
+                .buffer_cfg(MAX_MTU_SIZE as u8, MAX_MTU_SIZE as u8, L2CAP_TXQ, L2CAP_RXQ)
                 .map_err(to_matter_err)?
                 .build(sdc_p, &mut rng, &mpsl, &mut sdc_mem)
                 .map_err(to_matter_err)?;

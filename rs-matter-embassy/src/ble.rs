@@ -38,9 +38,9 @@ const MAX_CONNECTIONS: usize = 1;
 // Issue with esp32: we can't go lower than 251 on it
 // TODO: Make the MTU size a feature in future
 #[cfg(any(target_arch = "riscv32", target_arch = "xtensa"))]
-const MAX_MTU_SIZE: usize = 255;
+pub(crate) const MAX_MTU_SIZE: usize = 255;
 #[cfg(not(any(target_arch = "riscv32", target_arch = "xtensa")))]
-const MAX_MTU_SIZE: usize = 131;
+pub(crate) const MAX_MTU_SIZE: usize = 131;
 const MAX_CHANNELS: usize = 2;
 const ADV_SETS: usize = 1;
 

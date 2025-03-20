@@ -115,7 +115,10 @@ async fn main(_s: Spawner) {
 
     info!("Starting...");
 
-    let p = embassy_nrf::init(Default::default()); // TODO: 32 kHz clock
+    let mut config = embassy_nrf::config::Config::default();
+    config.hfclk_source = embassy_nrf::config::HfclkSource::ExternalXtal;
+
+    let p = embassy_nrf::init(config);
 
     let mut rng = rng::Rng::new(p.RNG, Irqs);
 
