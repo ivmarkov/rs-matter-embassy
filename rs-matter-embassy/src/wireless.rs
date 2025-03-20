@@ -454,6 +454,11 @@ pub mod nrf {
         where
             T: super::BleControllerTask,
         {
+            super::thread::nrf::NRF_THREAD_RADIO_STATE.set_enabled(false);
+            super::thread::nrf::NRF_THREAD_RADIO_STATE
+                .wait_enabled_state(false)
+                .await;
+
             let mpsl_p = nrf_sdc::mpsl::Peripherals::new(
                 &mut self.rtc0,
                 &mut self.timer0,
@@ -929,6 +934,9 @@ pub mod thread {
     #[cfg(feature = "nrf")]
     pub mod nrf {
         use core::cell::Cell;
+        use core::pin::pin;
+
+        use embassy_futures::select::select;
 
         use embassy_nrf::interrupt;
         use embassy_nrf::interrupt::typelevel::{Binding, Handler};
@@ -938,10 +946,13 @@ pub mod thread {
         use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
         use embassy_sync::blocking_mutex::Mutex;
 
+        use log::info;
+
         use openthread::nrf::Ieee802154Peripheral;
         use openthread::nrf::NrfRadio;
-        use openthread::{PhyRadioRunner, ProxyRadio, ProxyRadioResources, Radio};
+        use openthread::{EmbassyTimeTimer, PhyRadioRunner, ProxyRadio, ProxyRadioResources};
 
+        use rs_matter::utils::sync::Signal;
         use rs_matter_stack::matter::error::Error;
 
         pub use openthread::ProxyRadioResources as NrfThreadRadioResources;
@@ -950,15 +961,70 @@ pub mod thread {
 
         impl Handler<interrupt::typelevel::RADIO> for NrfThreadRadioInterruptHandler {
             unsafe fn on_interrupt() {
-                if IEEE802154_ENABLED.lock(Cell::get) {
+                if NRF_THREAD_RADIO_STATE.irq_enabled() {
                     // Call the IEEE 802.15.4 driver interrupt handler, if the driver is enabled
                     InterruptHandler::<embassy_nrf::peripherals::RADIO>::on_interrupt();
                 }
             }
         }
 
-        static IEEE802154_ENABLED: Mutex<CriticalSectionRawMutex, Cell<bool>> =
-            Mutex::new(Cell::new(false));
+        pub(crate) struct NrfThreadRadioState {
+            // TODO: Switch to atomic bool
+            irq_enabled: Mutex<CriticalSectionRawMutex, Cell<bool>>,
+            enable: Signal<CriticalSectionRawMutex, bool>,
+            state: Signal<CriticalSectionRawMutex, bool>,
+        }
+
+        impl NrfThreadRadioState {
+            pub const fn new() -> Self {
+                Self {
+                    irq_enabled: Mutex::new(Cell::new(false)),
+                    enable: Signal::new(false),
+                    state: Signal::new(false),
+                }
+            }
+
+            fn irq_enabled(&self) -> bool {
+                self.irq_enabled.lock(|s| s.get())
+            }
+
+            pub(crate) fn set_enabled(&self, enabled: bool) {
+                self.irq_enabled.lock(|s| s.set(enabled));
+                self.enable.modify(|state| {
+                    if *state != enabled {
+                        *state = enabled;
+                        (true, ())
+                    } else {
+                        (false, ())
+                    }
+                });
+            }
+
+            fn set_enabled_state(&self, enabled: bool) {
+                self.state.modify(|state| {
+                    if *state != enabled {
+                        *state = enabled;
+                        (true, ())
+                    } else {
+                        (false, ())
+                    }
+                });
+            }
+
+            async fn wait_enabled(&self, enabled: bool) {
+                self.enable
+                    .wait(|state| (*state == enabled).then_some(()))
+                    .await;
+            }
+
+            pub(crate) async fn wait_enabled_state(&self, enabled: bool) {
+                self.state
+                    .wait(|state| (*state == enabled).then_some(()))
+                    .await;
+            }
+        }
+
+        pub(crate) static NRF_THREAD_RADIO_STATE: NrfThreadRadioState = NrfThreadRadioState::new();
 
         struct NrfThreadRadioInterrupts;
 
@@ -990,12 +1056,29 @@ pub mod thread {
 
             /// Run the PHY radio
             pub async fn run(&mut self) -> ! {
-                let radio = NrfRadio::new(embassy_nrf::radio::ieee802154::Radio::new(
-                    &mut self.radio_peripheral,
-                    NrfThreadRadioInterrupts,
-                ));
+                loop {
+                    NRF_THREAD_RADIO_STATE.wait_enabled(true).await;
 
-                self.runner.run(radio, embassy_time::Delay).await
+                    {
+                        NRF_THREAD_RADIO_STATE.set_enabled_state(true);
+
+                        info!("Thread radio started");
+
+                        let radio = NrfRadio::new(embassy_nrf::radio::ieee802154::Radio::new(
+                            &mut self.radio_peripheral,
+                            NrfThreadRadioInterrupts,
+                        ));
+
+                        let mut cmd = pin!(NRF_THREAD_RADIO_STATE.wait_enabled(false));
+                        let mut runner = pin!(self.runner.run(radio, EmbassyTimeTimer));
+
+                        select(&mut cmd, &mut runner).await;
+
+                        NRF_THREAD_RADIO_STATE.set_enabled_state(false);
+
+                        info!("Thread radio stopped");
+                    }
+                }
             }
         }
 
@@ -1011,7 +1094,7 @@ pub mod thread {
             /// - `irq` - The radio interrupt binding
             pub fn new<'d, I>(
                 resources: &'a mut ProxyRadioResources,
-                mut radio_peripheral: impl Peripheral<P = embassy_nrf::peripherals::RADIO> + 'd,
+                radio_peripheral: impl Peripheral<P = embassy_nrf::peripherals::RADIO> + 'd,
                 _irq: I,
             ) -> (Self, NrfThreadRadioRunner<'a, 'd>)
             where
@@ -1020,12 +1103,13 @@ pub mod thread {
                     NrfThreadRadioInterruptHandler,
                 >,
             {
+                let caps = openthread::Capabilities::empty();
                 // TODO: A bit dirty as we create it and then drop it immediately
-                let caps = NrfRadio::new(embassy_nrf::radio::ieee802154::Radio::new(
-                    &mut radio_peripheral,
-                    NrfThreadRadioInterrupts,
-                ))
-                .caps();
+                // NrfRadio::new(embassy_nrf::radio::ieee802154::Radio::new(
+                //     &mut radio_peripheral,
+                //     NrfThreadRadioInterrupts,
+                // ))
+                // .caps();
 
                 let (proxy, proxy_runner) = ProxyRadio::new(caps, resources);
 
@@ -1040,9 +1124,14 @@ pub mod thread {
             where
                 A: super::ThreadRadioTask,
             {
-                let _guard = scopeguard::guard((), |_| IEEE802154_ENABLED.lock(|s| s.set(false)));
+                info!("About to enable Thread radio");
 
-                IEEE802154_ENABLED.lock(|s| s.set(true));
+                let _guard = scopeguard::guard((), |_| NRF_THREAD_RADIO_STATE.set_enabled(false));
+
+                NRF_THREAD_RADIO_STATE.set_enabled(true);
+                NRF_THREAD_RADIO_STATE.wait_enabled_state(true).await;
+
+                info!("Running Thread radio task");
 
                 task.run(&mut self.0).await
             }

@@ -16,7 +16,7 @@ harness = false
 opt-level = "z"
 
 [profile.release]
-opt-level = "z"
+opt-level = "s"
 debug = 2
 
 #[patch.'https://github.com/ivmarkov/rs-matter-stack']
@@ -34,7 +34,7 @@ nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "551a95436e99
 nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "551a95436e999b4290b4a33383aa3d6747b63dd9" }
 
 [dependencies]
-embassy-executor = { version = "0.7", default-features = false, features = ["task-arena-size-98304", "arch-cortex-m", "executor-thread", "executor-interrupt", "log"] }
+embassy-executor = { version = "0.7", default-features = false, features = ["task-arena-size-65536", "arch-cortex-m", "executor-thread", "executor-interrupt", "log"] }
 embassy-time = { version = "0.4", default-features = false, features = ["log"] }
 embassy-nrf = { version = "0.3.1", features = ["log", "time-driver-rtc1", "time", "nrf52840"], default-features = false }
 embassy-futures = "0.1.1"

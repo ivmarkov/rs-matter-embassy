@@ -374,6 +374,7 @@ where
                         warn!("GATT: Error processing event: {:?}", e);
                     }
                 }
+                _ => (),
             }
         }
 
