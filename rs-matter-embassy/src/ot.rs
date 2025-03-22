@@ -21,6 +21,11 @@ use rs_matter_stack::matter::utils::init::{init, Init};
 use rs_matter_stack::mdns::MatterMdnsServices;
 use rs_matter_stack::netif::{Netif, NetifConf};
 
+/// Re-export the `openthread` crate
+pub mod openthread {
+    pub use openthread::*;
+}
+
 /// The maximum number of sockets that the Matter stack would use:
 /// - One, for the UDP socket used by the Matter protocol
 const OT_MAX_SOCKETS: usize = 1;
@@ -31,9 +36,12 @@ const OT_SRP_BUF_SZ: usize = 512;
 /// A struct that holds all the resources required by the OpenThread stack,
 /// as used by Matter.
 pub struct OtMatterResources {
-    pub(crate) ot: OtResources,
-    pub(crate) udp: OtUdpResources<OT_MAX_SOCKETS, MAX_RX_PACKET_SIZE>,
-    pub(crate) srp: OtSrpResources<OT_MAX_SRP_RECORDS, OT_SRP_BUF_SZ>,
+    /// The OpenThread main resources
+    pub ot: OtResources,
+    /// The OpenThread UDP resources
+    pub udp: OtUdpResources<OT_MAX_SOCKETS, MAX_RX_PACKET_SIZE>,
+    /// The OpenThread SRP resources
+    pub srp: OtSrpResources<OT_MAX_SRP_RECORDS, OT_SRP_BUF_SZ>,
 }
 
 impl OtMatterResources {

@@ -8,9 +8,9 @@ resolver = "2"
 name = "light_thread"
 harness = false
 
-#[[bin]]
-#name = "light_eth"
-#harness = false
+[[bin]]
+name = "light_eth"
+harness = false
 
 [profile.dev]
 opt-level = "z"

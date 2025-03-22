@@ -1,8 +1,9 @@
-//! An example utilizing the `EmbassyThreadMatterStack` struct.
+//! An example utilizing the `EmbassyEthMatterStack` struct.
+//! As the name suggests, this Matter stack assembly uses Ethernet as the main transport, as well as for commissioning.
 //!
-//! As the name suggests, this Matter stack assembly uses Thread as the main transport,
-//! and thus BLE for commissioning).
-//! TODO: below is not implemented for Nordic yet
+//! Notice thart we actually don't use Ethernet for real, as NRFs don't have Ethernet ports out of the box.
+//! Instead, we utilize Thread, which - from the POV of Matter - is indistinguishable from Ethernet as long as the Matter
+//! stack is not concerned with connecting to the Thread network, managing its credentials etc. and can assume it "pre-exists".
 //!
 //! The example implements a fictitious Light device (an On-Off Matter cluster).
 #![no_std]
@@ -12,14 +13,17 @@ use core::mem::MaybeUninit;
 use core::pin::pin;
 use core::ptr::addr_of_mut;
 
+use embassy_futures::select::select4;
+
 use embassy_nrf::interrupt;
 use embassy_nrf::interrupt::{InterruptExt, Priority};
 use embassy_nrf::peripherals::RNG;
+use embassy_nrf::radio::InterruptHandler;
 use embassy_nrf::{bind_interrupts, rng};
 
 use embassy_executor::{InterruptExecutor, Spawner};
-use embassy_futures::select::select;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+
 use embassy_time::{Duration, Timer};
 
 use embedded_alloc::LlffHeap;
@@ -35,7 +39,11 @@ use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
 use rs_matter_embassy::matter::MATTER_PORT;
-use rs_matter_embassy::ot::OtMatterResources;
+use rs_matter_embassy::ot::openthread::nrf::NrfRadio;
+use rs_matter_embassy::ot::openthread::{
+    Capabilities, EmbassyTimeTimer, OpenThread, PhyRadioRunner, ProxyRadio, ProxyRadioResources,
+};
+use rs_matter_embassy::ot::{OtMatterResources, OtMdns, OtNetif};
 use rs_matter_embassy::rand::nrf::{nrf_init_rand, nrf_rand};
 use rs_matter_embassy::stack::mdns::MatterMdnsServices;
 use rs_matter_embassy::stack::persist::DummyPersist;
@@ -44,12 +52,7 @@ use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
 use rs_matter_embassy::stack::MdnsType;
-use rs_matter_embassy::wireless::nrf::NrfBleController;
-use rs_matter_embassy::wireless::thread::nrf::{
-    NrfThreadRadio, NrfThreadRadioInterruptHandler, NrfThreadRadioResources, NrfThreadRadioRunner,
-};
-use rs_matter_embassy::wireless::thread::{EmbassyThread, EmbassyThreadNCMatterStack};
-use rs_matter_embassy::wireless::EmbassyBle;
+use rs_matter_embassy::EmbassyEthMatterStack;
 
 use panic_rtt_target as _;
 
@@ -74,11 +77,7 @@ macro_rules! mk_static {
 
 bind_interrupts!(struct Irqs {
     RNG => rng::InterruptHandler<RNG>;
-    EGU0_SWI0 => rs_matter_embassy::wireless::nrf::NrfBleLowPrioInterruptHandler;
-    CLOCK_POWER => rs_matter_embassy::wireless::nrf::NrfBleClockInterruptHandler;
-    RADIO => rs_matter_embassy::wireless::nrf::NrfBleHighPrioInterruptHandler, NrfThreadRadioInterruptHandler;
-    TIMER0 => rs_matter_embassy::wireless::nrf::NrfBleHighPrioInterruptHandler;
-    RTC0 => rs_matter_embassy::wireless::nrf::NrfBleHighPrioInterruptHandler;
+    RADIO => InterruptHandler<embassy_nrf::peripherals::RADIO>;
 });
 
 #[interrupt]
@@ -90,6 +89,8 @@ static RADIO_EXECUTOR: InterruptExecutor = InterruptExecutor::new();
 
 #[global_allocator]
 static HEAP: LlffHeap = LlffHeap::empty();
+
+const THREAD_DATASET: &str = env!("THREAD_DATASET");
 
 /// We need a bigger log ring-buffer or else the device QR code printout is half-lost
 const LOG_RINGBUF_SIZE: usize = 4096;
@@ -141,46 +142,20 @@ async fn main(_s: Spawner) {
     // Allocate the Matter stack.
     // For MCUs, it is best to allocate it statically, so as to avoid program stack blowups (its memory footprint is ~ 35 to 50KB).
     // It is also (currently) a mandatory requirement when the wireless stack variation is used.
-    let stack =
-        mk_static!(EmbassyThreadNCMatterStack<()>).init_with(EmbassyThreadNCMatterStack::init(
-            &TEST_BASIC_INFO,
-            TEST_BASIC_COMM_DATA,
-            &TEST_DEV_ATT,
-            MdnsType::Provided(mdns_services),
-            epoch,
-            nrf_rand,
-        ));
+    let stack = mk_static!(EmbassyEthMatterStack<()>).init_with(EmbassyEthMatterStack::init(
+        &TEST_BASIC_INFO,
+        TEST_BASIC_COMM_DATA,
+        &TEST_DEV_ATT,
+        MdnsType::Provided(mdns_services),
+        epoch,
+        nrf_rand,
+    ));
 
-    let nrf_ble_controller = NrfBleController::new(
-        p.RADIO,
-        p.RTC0,
-        p.TIMER0,
-        p.TEMP,
-        p.PPI_CH17,
-        p.PPI_CH18,
-        p.PPI_CH19,
-        p.PPI_CH20,
-        p.PPI_CH21,
-        p.PPI_CH22,
-        p.PPI_CH23,
-        p.PPI_CH24,
-        p.PPI_CH25,
-        p.PPI_CH26,
-        p.PPI_CH27,
-        p.PPI_CH28,
-        p.PPI_CH29,
-        p.PPI_CH30,
-        p.PPI_CH31,
-        stack.matter().rand(),
-        Irqs,
+    let (radio_proxy, radio_runner) = ProxyRadio::new(
+        Capabilities::empty(),
+        mk_static!(ProxyRadioResources, ProxyRadioResources::new()),
     );
-
-    // TODO: Share the radio peripheral between the BLE and Thread stacks
-    let (nrf_radio, nrf_radio_runner) = NrfThreadRadio::new(
-        mk_static!(NrfThreadRadioResources, NrfThreadRadioResources::new()),
-        unsafe { embassy_nrf::peripherals::RADIO::steal() },
-        Irqs,
-    );
+    let radio = NrfRadio::new(embassy_nrf::radio::ieee802154::Radio::new(p.RADIO, Irqs));
 
     // High-priority executor: EGU1_SWI1, priority level 6
     interrupt::EGU1_SWI1.set_priority(Priority::P6);
@@ -190,8 +165,39 @@ async fn main(_s: Spawner) {
     // hence these are emulated in software, so low latency is crucial
     RADIO_EXECUTOR
         .start(interrupt::EGU1_SWI1)
-        .spawn(run_radio(nrf_radio_runner))
+        .spawn(run_radio(radio_runner, radio))
         .unwrap();
+
+    let mut ot_rng = MatterRngCore::new(stack.matter().rand());
+    let ot_resources = mk_static!(OtMatterResources).init_with(OtMatterResources::init());
+
+    let ot = OpenThread::new_with_udp_srp(
+        ieee_eui64,
+        &mut ot_rng,
+        &mut ot_resources.ot,
+        &mut ot_resources.udp,
+        &mut ot_resources.srp,
+    )
+    .unwrap();
+
+    let ot_mdns = OtMdns::new(ot, mdns_services).unwrap();
+
+    let mut ot_runner = pin!(async {
+        ot.run(radio_proxy).await;
+        #[allow(unreachable_code)]
+        Ok(())
+    });
+    let mut ot_mdns_runner = pin!(async {
+        ot_mdns.run().await.unwrap();
+        #[allow(unreachable_code)]
+        Ok(())
+    });
+
+    ot.srp_autostart().unwrap();
+
+    ot.set_active_dataset_tlv_hexstr(THREAD_DATASET).unwrap();
+    ot.enable_ipv6(true).unwrap();
+    ot.enable_thread(true).unwrap();
 
     // == Step 4: ==
     // Our "light" on-off cluster.
@@ -224,20 +230,11 @@ async fn main(_s: Spawner) {
     // not being very intelligent w.r.t. stack usage in async functions
     //
     // This step can be repeated in that the stack can be stopped and started multiple times, as needed.
-    let mut ot_rng = MatterRngCore::new(stack.matter().rand());
-    let ot_resources = mk_static!(OtMatterResources).init_with(OtMatterResources::init());
     let mut matter = pin!(stack.run(
-        // The Matter stack needs to instantiate `openthread`
-        EmbassyThread::new(
-            nrf_radio,
-            mdns_services,
-            ot_resources,
-            ieee_eui64,
-            &mut ot_rng
-        )
-        .unwrap(),
-        // The Matter stack needs BLE
-        EmbassyBle::new(nrf_ble_controller, stack),
+        // The Matter stack needs access to the netif so as to detect network going up/down
+        OtNetif::new(ot),
+        // The Matter stack needs to open two UDP sockets
+        ot,
         // The Matter stack needs a persister to store its state
         // `EmbassyPersist`+`EmbassyKvBlobStore` saves to a user-supplied NOR Flash region
         // However, for this demo and for simplicity, we use a dummy persister that does nothing
@@ -270,7 +267,15 @@ async fn main(_s: Spawner) {
     });
 
     // Schedule the Matter run & the device loop together
-    select(&mut matter, &mut device).coalesce().await.unwrap();
+    select4(
+        &mut matter,
+        &mut device,
+        &mut ot_runner,
+        &mut ot_mdns_runner,
+    )
+    .coalesce()
+    .await
+    .unwrap();
 }
 
 /// Basic info about our device
@@ -295,7 +300,7 @@ const LIGHT_ENDPOINT_ID: u16 = 1;
 const NODE: Node = Node {
     id: 0,
     endpoints: &[
-        EmbassyThreadNCMatterStack::<()>::root_metadata(),
+        EmbassyEthMatterStack::<()>::root_metadata(),
         Endpoint {
             id: LIGHT_ENDPOINT_ID,
             device_types: &[DEV_TYPE_ON_OFF_LIGHT],
@@ -305,6 +310,9 @@ const NODE: Node = Node {
 };
 
 #[embassy_executor::task]
-async fn run_radio(mut runner: NrfThreadRadioRunner<'static, 'static>) -> ! {
-    runner.run().await
+async fn run_radio(
+    mut runner: PhyRadioRunner<'static>,
+    radio: NrfRadio<'static, embassy_nrf::peripherals::RADIO>,
+) -> ! {
+    runner.run(radio, EmbassyTimeTimer).await
 }

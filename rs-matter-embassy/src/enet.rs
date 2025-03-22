@@ -19,7 +19,7 @@ use rs_matter_stack::netif::{Netif, NetifConf};
 /// Re-export the `edge-nal-embassy` crate
 pub use edge_nal_embassy::*;
 
-/// Re-export the `embassy_net` crate
+/// Re-export the `embassy-net` crate
 pub mod net {
     pub use ::embassy_net::*;
 }

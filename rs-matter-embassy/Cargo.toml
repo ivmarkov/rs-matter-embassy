@@ -40,7 +40,7 @@ default = ["rs-matter-stack", "openthread"]
 embassy-net = ["dep:embassy-net", "dep:edge-nal-embassy"]
 esp = ["esp-wifi", "esp-hal", "openthread?/esp-ieee802154"]
 rp = ["cyw43", "cyw43-pio", "embassy-rp", "rand_core"]
-nrf = ["embassy-nrf", "rand_core", "nrf-sdc", "nrf-mpsl", "openthread?/embassy-nrf"]
+nrf = ["embassy-nrf", "rand_core", "nrf-sdc", "nrf-mpsl", "portable-atomic", "openthread?/embassy-nrf"]
 
 [dependencies]
 log = { version = "0.4", default-features = false }
@@ -64,6 +64,7 @@ trouble-host = { version = "0.1", git = "https://github.com/embassy-rs/trouble" 
 bt-hci = "0.2"
 
 openthread = { version = "0.1", git = "https://github.com/ivmarkov/esp-openthread", optional = true, features = ["udp", "srp", "edge-nal"] }
+hex-slice = "0.1"
 
 # Only necessary when `rs-matter-embassy` is providing extra-sugar for the `esp32*` chips family
 esp-wifi = { version = "0.12", optional = true, features = ["wifi", "ble"] }
@@ -80,3 +81,4 @@ embassy-nrf = { version = "0.3.1", optional = true, features = ["log", "time-dri
 nrf-sdc = { version = "0.1.0", default-features = false, optional = true, features = ["peripheral", "nrf52840"] }
 # TODO: PR upstream a re-export of the `critical-section-impl` feature by `nrf-sdc` and making it enabled by default
 nrf-mpsl = { version = "0.1.0", default-features = false, optional = true, features = ["nrf52840", "critical-section-impl"] }
+portable-atomic = { version = "1", optional = true }

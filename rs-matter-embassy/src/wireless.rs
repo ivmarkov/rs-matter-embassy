@@ -535,7 +535,8 @@ pub mod thread {
     use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 
     use embassy_time::{Duration, Instant, Timer};
-    use log::error;
+
+    use log::{error, info};
 
     use openthread::{Channels, OpenThread, OtError, Radio};
 
@@ -827,6 +828,14 @@ pub mod thread {
 
             let _ = self.0.enable_thread(false);
 
+            // NOTE: Printing the dataset is a security issue, but we do it for now for debugging purposes
+            // (i.e. for running some of the pseudo-eth examples the user needs the Thread network dataset)
+            use hex_slice::AsHex;
+            info!(
+                "Connecting to Thread network, dataset: {:02x}",
+                creds.op_dataset.plain_hex(false)
+            );
+
             self.0
                 .set_active_dataset_tlv(&creds.op_dataset)
                 .map_err(to_matter_err)?;
@@ -933,7 +942,6 @@ pub mod thread {
 
     #[cfg(feature = "nrf")]
     pub mod nrf {
-        use core::cell::Cell;
         use core::pin::pin;
 
         use embassy_futures::select::select;
@@ -944,7 +952,6 @@ pub mod thread {
         use embassy_nrf::{Peripheral, PeripheralRef};
 
         use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-        use embassy_sync::blocking_mutex::Mutex;
 
         use log::info;
 
@@ -954,6 +961,8 @@ pub mod thread {
 
         use rs_matter::utils::sync::Signal;
         use rs_matter_stack::matter::error::Error;
+
+        use portable_atomic::{AtomicBool, Ordering};
 
         pub use openthread::ProxyRadioResources as NrfThreadRadioResources;
 
@@ -969,8 +978,7 @@ pub mod thread {
         }
 
         pub(crate) struct NrfThreadRadioState {
-            // TODO: Switch to atomic bool
-            irq_enabled: Mutex<CriticalSectionRawMutex, Cell<bool>>,
+            irq_enabled: AtomicBool,
             enable: Signal<CriticalSectionRawMutex, bool>,
             state: Signal<CriticalSectionRawMutex, bool>,
         }
@@ -978,18 +986,18 @@ pub mod thread {
         impl NrfThreadRadioState {
             pub const fn new() -> Self {
                 Self {
-                    irq_enabled: Mutex::new(Cell::new(false)),
+                    irq_enabled: AtomicBool::new(false),
                     enable: Signal::new(false),
                     state: Signal::new(false),
                 }
             }
 
             fn irq_enabled(&self) -> bool {
-                self.irq_enabled.lock(|s| s.get())
+                self.irq_enabled.load(Ordering::SeqCst)
             }
 
             pub(crate) fn set_enabled(&self, enabled: bool) {
-                self.irq_enabled.lock(|s| s.set(enabled));
+                self.irq_enabled.store(enabled, Ordering::SeqCst);
                 self.enable.modify(|state| {
                     if *state != enabled {
                         *state = enabled;
