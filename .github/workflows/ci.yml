@@ -77,7 +77,11 @@ jobs:
         run: cd examples/nrf; cargo fmt -- --check
 
       - name: Examples-NRF-Build | Clippy
+        env:
+          THREAD_DATASET: "000003"
         run: cd examples/nrf; cargo clippy --no-deps -- -Dwarnings
 
       - name: Examples-NRF-Build | Compile
+        env:
+          THREAD_DATASET: "000003"
         run: cd examples/nrf; cargo build
