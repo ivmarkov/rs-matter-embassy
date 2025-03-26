@@ -38,7 +38,7 @@ use rs_matter_embassy::matter::data_model::objects::{Dataver, Endpoint, HandlerC
 use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
-use rs_matter_embassy::matter::MATTER_PORT;
+use rs_matter_embassy::matter::{BasicCommData, MATTER_PORT};
 use rs_matter_embassy::ot::openthread::nrf::NrfRadio;
 use rs_matter_embassy::ot::openthread::{
     Capabilities, EmbassyTimeTimer, OpenThread, PhyRadioRunner, ProxyRadio, ProxyRadioResources,
@@ -123,6 +123,10 @@ async fn main(_s: Spawner) {
 
     let mut rng = rng::Rng::new(p.RNG, Irqs);
 
+    // Use a random/unique Matter discritimator for this session,
+    // in case there are left-overs from our previous registrations in Thread SRP
+    let discriminator = (rng.next_u32() & 0xfff) as u16;
+
     // TODO
     let mut ieee_eui64 = [0; 8];
     RngCore::fill_bytes(&mut rng, &mut ieee_eui64);
@@ -144,7 +148,10 @@ async fn main(_s: Spawner) {
     // It is also (currently) a mandatory requirement when the wireless stack variation is used.
     let stack = mk_static!(EmbassyEthMatterStack<()>).init_with(EmbassyEthMatterStack::init(
         &TEST_BASIC_INFO,
-        TEST_BASIC_COMM_DATA,
+        BasicCommData {
+            password: TEST_BASIC_COMM_DATA.password,
+            discriminator,
+        },
         &TEST_DEV_ATT,
         MdnsType::Provided(mdns_services),
         epoch,
