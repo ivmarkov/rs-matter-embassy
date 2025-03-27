@@ -13,6 +13,10 @@ name = "light_eth"
 harness = false
 
 [[bin]]
+name = "light_eth2"
+harness = false
+
+[[bin]]
 name = "light_thread"
 required-features = ["esp32c6"]
 harness = false
@@ -26,7 +30,8 @@ harness = false
 
 [patch.crates-io]
 #rs-matter = { git = "https://github.com/project-chip/rs-matter" }
-rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "next" }
+#rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "next" }
+rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "proper-retransmit-backoff" }
 #rs-matter = { path = "../../../rs-matter/rs-matter" }
 
 [profile.dev]

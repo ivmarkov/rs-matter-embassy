@@ -31,7 +31,7 @@ use rs_matter_embassy::matter::data_model::objects::{Dataver, Endpoint, HandlerC
 use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
-use rs_matter_embassy::matter::MATTER_PORT;
+use rs_matter_embassy::matter::{BasicCommData, MATTER_PORT};
 use rs_matter_embassy::ot::OtMatterResources;
 use rs_matter_embassy::rand::esp::{esp_init_rand, esp_rand};
 use rs_matter_embassy::stack::mdns::MatterMdnsServices;
@@ -73,6 +73,10 @@ async fn main(_s: Spawner) {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let mut rng = esp_hal::rng::Rng::new(peripherals.RNG);
 
+    // Use a random/unique Matter discriminator for this session,
+    // in case there are left-overs from our previous registrations in Thread SRP
+    let discriminator = (rng.next_u32() & 0xfff) as u16;
+
     // TODO
     let mut ieee_eui64 = [0; 8];
     rng.fill_bytes(&mut ieee_eui64);
@@ -111,7 +115,10 @@ async fn main(_s: Spawner) {
     // It is also (currently) a mandatory requirement when the wireless stack variation is used.
     let stack = &*Box::leak(Box::new_uninit()).init_with(EmbassyThreadNCMatterStack::<()>::init(
         &TEST_BASIC_INFO,
-        TEST_BASIC_COMM_DATA,
+        BasicCommData {
+            password: TEST_BASIC_COMM_DATA.password,
+            discriminator,
+        },
         &TEST_DEV_ATT,
         MdnsType::Provided(mdns_services),
         epoch,
@@ -211,6 +218,8 @@ const TEST_BASIC_INFO: BasicInfoConfig = BasicInfoConfig {
     device_name: "MyLight",
     product_name: "ACME Light",
     vendor_name: "ACME",
+    sai: Some(500),
+    sii: None,
 };
 
 /// Endpoint 0 (the root endpoint) always runs

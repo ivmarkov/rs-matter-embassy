@@ -34,7 +34,7 @@ use rs_matter_embassy::matter::data_model::objects::{Dataver, Endpoint, HandlerC
 use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
-use rs_matter_embassy::matter::MATTER_PORT;
+use rs_matter_embassy::matter::{BasicCommData, MATTER_PORT};
 use rs_matter_embassy::ot::OtMatterResources;
 use rs_matter_embassy::rand::nrf::{nrf_init_rand, nrf_rand};
 use rs_matter_embassy::stack::mdns::MatterMdnsServices;
@@ -122,6 +122,10 @@ async fn main(_s: Spawner) {
 
     let mut rng = rng::Rng::new(p.RNG, Irqs);
 
+    // Use a random/unique Matter discriminator for this session,
+    // in case there are left-overs from our previous registrations in Thread SRP
+    let discriminator = (rng.next_u32() & 0xfff) as u16;
+
     // TODO
     let mut ieee_eui64 = [0; 8];
     RngCore::fill_bytes(&mut rng, &mut ieee_eui64);
@@ -144,7 +148,10 @@ async fn main(_s: Spawner) {
     let stack =
         mk_static!(EmbassyThreadNCMatterStack<()>).init_with(EmbassyThreadNCMatterStack::init(
             &TEST_BASIC_INFO,
-            TEST_BASIC_COMM_DATA,
+            BasicCommData {
+                password: TEST_BASIC_COMM_DATA.password,
+                discriminator,
+            },
             &TEST_DEV_ATT,
             MdnsType::Provided(mdns_services),
             epoch,
@@ -285,6 +292,8 @@ const TEST_BASIC_INFO: BasicInfoConfig = BasicInfoConfig {
     device_name: "MyLight",
     product_name: "ACME Light",
     vendor_name: "ACME",
+    sai: Some(1000),
+    sii: None,
 };
 
 /// Endpoint 0 (the root endpoint) always runs

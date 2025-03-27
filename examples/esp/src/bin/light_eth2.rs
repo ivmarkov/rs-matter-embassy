@@ -1,7 +1,7 @@
 //! An example utilizing the `EmbassyEthMatterStack` struct.
 //! As the name suggests, this Matter stack assembly uses Ethernet as the main transport, as well as for commissioning.
 //!
-//! Notice thart we actually don't use Ethernet for real, as NRFs don't have Ethernet ports out of the box.
+//! Notice thart we actually don't use Ethernet for real, as ESP32s don't have Ethernet ports out of the box.
 //! Instead, we utilize Thread, which - from the POV of Matter - is indistinguishable from Ethernet as long as the Matter
 //! stack is not concerned with connecting to the Thread network, managing its credentials etc. and can assume it "pre-exists".
 //!
@@ -9,24 +9,19 @@
 #![no_std]
 #![no_main]
 
+use core::env;
 use core::mem::MaybeUninit;
 use core::pin::pin;
-use core::ptr::addr_of_mut;
 
+use alloc::boxed::Box;
+
+use embassy_executor::Spawner;
 use embassy_futures::select::select4;
-
-use embassy_nrf::interrupt;
-use embassy_nrf::interrupt::{InterruptExt, Priority};
-use embassy_nrf::peripherals::RNG;
-use embassy_nrf::radio::InterruptHandler;
-use embassy_nrf::{bind_interrupts, rng};
-
-use embassy_executor::{InterruptExecutor, Spawner};
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-
 use embassy_time::{Duration, Timer};
 
-use embedded_alloc::LlffHeap;
+use esp_backtrace as _;
+use esp_hal::clock::CpuClock;
+use esp_ieee802154::Ieee802154;
 
 use log::info;
 
@@ -39,12 +34,10 @@ use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
 use rs_matter_embassy::matter::{BasicCommData, MATTER_PORT};
-use rs_matter_embassy::ot::openthread::nrf::NrfRadio;
-use rs_matter_embassy::ot::openthread::{
-    Capabilities, EmbassyTimeTimer, OpenThread, PhyRadioRunner, ProxyRadio, ProxyRadioResources,
-};
+use rs_matter_embassy::ot::openthread::esp::EspRadio;
+use rs_matter_embassy::ot::openthread::OpenThread;
 use rs_matter_embassy::ot::{OtMatterResources, OtMdns, OtNetif};
-use rs_matter_embassy::rand::nrf::{nrf_init_rand, nrf_rand};
+use rs_matter_embassy::rand::esp::{esp_init_rand, esp_rand};
 use rs_matter_embassy::stack::mdns::MatterMdnsServices;
 use rs_matter_embassy::stack::persist::DummyPersist;
 use rs_matter_embassy::stack::rand::{MatterRngCore, RngCore};
@@ -54,74 +47,33 @@ use rs_matter_embassy::stack::test_device::{
 use rs_matter_embassy::stack::MdnsType;
 use rs_matter_embassy::EmbassyEthMatterStack;
 
-use panic_rtt_target as _;
-
 use tinyrlibc as _;
 
-use rtt_target::rtt_init_log;
-
-macro_rules! mk_static {
-    ($t:ty) => {{
-        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
-        #[deny(unused_attributes)]
-        let x = STATIC_CELL.uninit();
-        x
-    }};
-    ($t:ty,$val:expr) => {{
-        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
-        #[deny(unused_attributes)]
-        let x = STATIC_CELL.uninit().write(($val));
-        x
-    }};
-}
-
-bind_interrupts!(struct Irqs {
-    RNG => rng::InterruptHandler<RNG>;
-    RADIO => InterruptHandler<embassy_nrf::peripherals::RADIO>;
-});
-
-#[interrupt]
-unsafe fn EGU1_SWI1() {
-    RADIO_EXECUTOR.on_interrupt()
-}
-
-static RADIO_EXECUTOR: InterruptExecutor = InterruptExecutor::new();
-
-#[global_allocator]
-static HEAP: LlffHeap = LlffHeap::empty();
+extern crate alloc;
 
 const THREAD_DATASET: &str = env!("THREAD_DATASET");
 
-/// We need a bigger log ring-buffer or else the device QR code printout is half-lost
-const LOG_RINGBUF_SIZE: usize = 4096;
-
-#[embassy_executor::main]
+#[esp_hal_embassy::main]
 async fn main(_s: Spawner) {
-    // `rs-matter` uses the `x509` crate which (still) needs a few kilos of heap space
-    {
-        const HEAP_SIZE: usize = 8192;
-
-        static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
-        unsafe { HEAP.init(addr_of_mut!(HEAP_MEM) as usize, HEAP_SIZE) }
-    }
-
-    // == Step 1: ==
-    // Necessary `nrf-hal` initialization boilerplate
-
-    rtt_init_log!(
-        log::LevelFilter::Info,
-        rtt_target::ChannelMode::NoBlockSkip,
-        LOG_RINGBUF_SIZE
-    );
+    esp_println::logger::init_logger(log::LevelFilter::Info);
 
     info!("Starting...");
 
-    let mut config = embassy_nrf::config::Config::default();
-    config.hfclk_source = embassy_nrf::config::HfclkSource::ExternalXtal;
+    // == Step 1: ==
+    // Necessary `esp-hal` and `esp-wifi` initialization boilerplate
 
-    let p = embassy_nrf::init(config);
+    let peripherals = esp_hal::init({
+        let mut config = esp_hal::Config::default();
+        config.cpu_clock = CpuClock::max();
+        config
+    });
 
-    let mut rng = rng::Rng::new(p.RNG, Irqs);
+    // Heap strictly necessary only for Wifi and for the only Matter dependency which needs (~4KB) alloc - `x509`
+    // However since `esp32` specifically has a disjoint heap which causes bss size troubles, it is easier
+    // to allocate the statics once from heap as well
+    init_heap();
+
+    let mut rng = esp_hal::rng::Rng::new(peripherals.RNG);
 
     // Use a random/unique Matter discriminator for this session,
     // in case there are left-overs from our previous registrations in Thread SRP
@@ -133,20 +85,29 @@ async fn main(_s: Spawner) {
 
     // To erase generics, `Matter` takes a rand `fn` rather than a trait or a closure,
     // so we need to initialize the global `rand` fn once
-    nrf_init_rand(rng);
+    esp_init_rand(rng);
+
+    #[cfg(not(feature = "esp32"))]
+    {
+        esp_hal_embassy::init(
+            esp_hal::timer::systimer::SystemTimer::new(peripherals.SYSTIMER).alarm0,
+        );
+    }
+    #[cfg(feature = "esp32")]
+    {
+        esp_hal_embassy::init(timg0.timer1);
+    }
 
     // == Step 2: ==
     // Replace the built-in Matter mDNS responder with a bridge that delegates
     // all mDNS work to the OpenThread SRP client.
     // Thread is not friendly to IpV6 multicast, so we have to use SRP instead.
-    let mdns_services = &*mk_static!(MatterMdnsServices<'static, NoopRawMutex>)
+    let mdns_services = &*Box::leak(Box::new_uninit())
         .init_with(MatterMdnsServices::init(&TEST_BASIC_INFO, MATTER_PORT));
 
     // == Step 3: ==
     // Allocate the Matter stack.
-    // For MCUs, it is best to allocate it statically, so as to avoid program stack blowups (its memory footprint is ~ 35 to 50KB).
-    // It is also (currently) a mandatory requirement when the wireless stack variation is used.
-    let stack = mk_static!(EmbassyEthMatterStack<()>).init_with(EmbassyEthMatterStack::init(
+    let stack = Box::leak(Box::new_uninit()).init_with(EmbassyEthMatterStack::<()>::init(
         &TEST_BASIC_INFO,
         BasicCommData {
             password: TEST_BASIC_COMM_DATA.password,
@@ -155,28 +116,11 @@ async fn main(_s: Spawner) {
         &TEST_DEV_ATT,
         MdnsType::Provided(mdns_services),
         epoch,
-        nrf_rand,
+        esp_rand,
     ));
 
-    let (radio_proxy, radio_runner) = ProxyRadio::new(
-        Capabilities::empty(),
-        mk_static!(ProxyRadioResources, ProxyRadioResources::new()),
-    );
-    let radio = NrfRadio::new(embassy_nrf::radio::ieee802154::Radio::new(p.RADIO, Irqs));
-
-    // High-priority executor: EGU1_SWI1, priority level 6
-    interrupt::EGU1_SWI1.set_priority(Priority::P6);
-
-    // The NRF radio needs to run in a high priority executor
-    // because it is lacking hardware MAC-filtering and ACK caps,
-    // hence these are emulated in software, so low latency is crucial
-    RADIO_EXECUTOR
-        .start(interrupt::EGU1_SWI1)
-        .spawn(run_radio(radio_runner, radio))
-        .unwrap();
-
     let mut ot_rng = MatterRngCore::new(stack.matter().rand());
-    let ot_resources = mk_static!(OtMatterResources).init_with(OtMatterResources::init());
+    let ot_resources = Box::leak(Box::new_uninit()).init_with(OtMatterResources::init());
 
     let ot = OpenThread::new_with_udp_srp(
         ieee_eui64,
@@ -190,7 +134,11 @@ async fn main(_s: Spawner) {
     let ot_mdns = OtMdns::new(ot, mdns_services).unwrap();
 
     let mut ot_runner = pin!(async {
-        ot.run(radio_proxy).await;
+        ot.run(EspRadio::new(Ieee802154::new(
+            peripherals.IEEE802154,
+            peripherals.RADIO_CLK,
+        )))
+        .await;
         #[allow(unreachable_code)]
         Ok(())
     });
@@ -231,12 +179,9 @@ async fn main(_s: Spawner) {
             ))),
         );
 
-    // == Step 5: ==
     // Run the Matter stack with our handler
     // Using `pin!` is completely optional, but saves some memory due to `rustc`
     // not being very intelligent w.r.t. stack usage in async functions
-    //
-    // This step can be repeated in that the stack can be stopped and started multiple times, as needed.
     let mut matter = pin!(stack.run(
         // The Matter stack needs access to the netif so as to detect network going up/down
         OtNetif::new(ot),
@@ -297,7 +242,7 @@ const TEST_BASIC_INFO: BasicInfoConfig = BasicInfoConfig {
     device_name: "MyLight",
     product_name: "ACME Light",
     vendor_name: "ACME",
-    sai: None,
+    sai: Some(1000),
     sii: None,
 };
 
@@ -318,10 +263,35 @@ const NODE: Node = Node {
     ],
 };
 
-#[embassy_executor::task]
-async fn run_radio(
-    mut runner: PhyRadioRunner<'static>,
-    radio: NrfRadio<'static, embassy_nrf::peripherals::RADIO>,
-) -> ! {
-    runner.run(radio, EmbassyTimeTimer).await
+#[allow(static_mut_refs)]
+fn init_heap() {
+    fn add_region<const N: usize>(region: &'static mut MaybeUninit<[u8; N]>) {
+        unsafe {
+            esp_alloc::HEAP.add_region(esp_alloc::HeapRegion::new(
+                region.as_mut_ptr() as *mut u8,
+                N,
+                esp_alloc::MemoryCapability::Internal.into(),
+            ));
+        }
+    }
+
+    #[cfg(feature = "esp32")]
+    {
+        // The esp32 has two disjoint memory regions for heap
+        // Also, it has 64KB reserved for the BT stack in the first region, so we can't use that
+
+        static mut HEAP1: MaybeUninit<[u8; 30 * 1024]> = MaybeUninit::uninit();
+        #[link_section = ".dram2_uninit"]
+        static mut HEAP2: MaybeUninit<[u8; 96 * 1024]> = MaybeUninit::uninit();
+
+        add_region(unsafe { &mut HEAP1 });
+        add_region(unsafe { &mut HEAP2 });
+    }
+
+    #[cfg(not(feature = "esp32"))]
+    {
+        static mut HEAP: MaybeUninit<[u8; 186 * 1024]> = MaybeUninit::uninit();
+
+        add_region(unsafe { &mut HEAP });
+    }
 }

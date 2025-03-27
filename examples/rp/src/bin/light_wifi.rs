@@ -186,6 +186,8 @@ async fn main(spawner: Spawner) {
             device_name: "MyLight",
             product_name: "ACME Light",
             vendor_name: "ACME",
+            sai: None,
+            sii: None,
         },
         TEST_BASIC_COMM_DATA,
         &TEST_DEV_ATT,
