@@ -56,12 +56,14 @@ jobs:
         env:
           WIFI_SSID: "ssid"
           WIFI_PASS: "pass"
+          THREAD_DATASET: "000003"
         run: cd examples/esp; cargo clippy --no-deps -- -Dwarnings
 
       - name: Examples-ESP-Build | Compile
         env:
           WIFI_SSID: "ssid"
           WIFI_PASS: "pass"
+          THREAD_DATASET: "000003"
         run: cd examples/esp; cargo build
 
       - name: Examples-RP-Build | Fmt Check
