@@ -51,7 +51,7 @@ embassy-time = "0.4"
 embedded-io = "0.6"
 scopeguard = { version = "1", default-features = false }
 rs-matter = { version = "0.1", default-features = false, features = ["rustcrypto"] }
-rs-matter-stack = { git = "https://github.com/ivmarkov/rs-matter-stack", default-features = false, optional = true, features = ["rustcrypto"] }
+rs-matter-stack = { git = "https://github.com/ivmarkov/rs-matter-stack", branch = "master", default-features = false, optional = true, features = ["rustcrypto"] }
 static_cell = "2"
 
 embedded-storage-async = "0.4.1"
@@ -60,10 +60,12 @@ sequential-storage = "3"
 embassy-net = { version = "0.6", optional = true, features = ["proto-ipv4", "proto-ipv6", "multicast", "dhcpv4"] }
 edge-nal-embassy = { version = "0.5", optional = true }
 
-trouble-host = { version = "0.1", git = "https://github.com/embassy-rs/trouble" }
+#trouble-host = { version = "0.1", git = "https://github.com/embassy-rs/trouble" }
+trouble-host = { git = "https://github.com/embassy-rs/trouble", branch = "main" }
 bt-hci = "0.2"
 
-openthread = { version = "0.1", git = "https://github.com/ivmarkov/esp-openthread", optional = true, features = ["udp", "srp", "edge-nal"] }
+# openthread = { version = "0.1", git = "https://github.com/ivmarkov/esp-openthread", optional = true, features = ["udp", "srp", "edge-nal"] }
+openthread = { git = "https://github.com/ivmarkov/esp-openthread", branch = "main", optional = true, features = ["udp", "srp", "edge-nal"] }
 hex-slice = "0.1"
 
 # Only necessary when `rs-matter-embassy` is providing extra-sugar for the `esp32*` chips family
