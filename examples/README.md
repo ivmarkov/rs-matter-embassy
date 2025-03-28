@@ -121,3 +121,18 @@ cargo +nightly build --target riscv32imac-unknown-none-elf --no-default-features
 espflash flash target/riscv32imac-unknown-none-elf/debug/light_wifi --baud 1500000
 espflash monitor --elf target/riscv32imac-unknown-none-elf/debug/light_wifi
 ```
+
+### Nordic nRF52840 DK
+
+```sh
+cd nrf
+
+# Get the Thread dataset from a commissioned device and set the environment variable
+# `ot cli dataset active -x`
+export THREAD_DATASET="000003"
+cargo build
+
+# Replace `light_thread` with `light_eth` below to flash the Ethernet example
+cargo run --bin light_thread
+
+```
