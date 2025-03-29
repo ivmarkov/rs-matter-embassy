@@ -19,7 +19,9 @@ harness = false
 #rs-matter-stack = { path = "../../rs-matter-stack" }
 #[patch.'https://github.com/embassy-rs/trouble']
 #trouble-host = { version = "0.1", path = "../../../trouble/host" }
-#[patch.'https://github.com/ivmarkov/esp-openthread']
+[patch.'https://github.com/esp-rs/esp-openthread']
+openthread = { version = "0.1", git = "https://github.com/ivmarkov/esp-openthread", branch = "next" }
+#[patch.'https://github.com/esp-rs/esp-openthread']
 #openthread = { version = "0.1", path = "../../esp-openthread/openthread" }
 
 [patch.crates-io]
@@ -63,7 +65,7 @@ edge-nal-embassy = { version = "0.5", optional = true }
 trouble-host = { version = "0.1", git = "https://github.com/embassy-rs/trouble" }
 bt-hci = "0.2"
 
-openthread = { version = "0.1", git = "https://github.com/ivmarkov/esp-openthread", optional = true, features = ["udp", "srp", "edge-nal"] }
+openthread = { version = "0.1", git = "https://github.com/esp-rs/esp-openthread", optional = true, features = ["udp", "srp", "edge-nal"] }
 hex-slice = "0.1"
 
 # Only necessary when `rs-matter-embassy` is providing extra-sugar for the `esp32*` chips family
