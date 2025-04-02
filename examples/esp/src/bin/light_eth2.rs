@@ -35,11 +35,11 @@ use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
 use rs_matter_embassy::matter::{BasicCommData, MATTER_PORT};
 use rs_matter_embassy::ot::openthread::esp::EspRadio;
-use rs_matter_embassy::ot::openthread::OpenThread;
+use rs_matter_embassy::ot::openthread::{OpenThread, RamSettings};
 use rs_matter_embassy::ot::{OtMatterResources, OtMdns, OtNetif};
 use rs_matter_embassy::rand::esp::{esp_init_rand, esp_rand};
 use rs_matter_embassy::stack::mdns::MatterMdnsServices;
-use rs_matter_embassy::stack::persist::DummyPersist;
+use rs_matter_embassy::stack::persist::DummyKvBlobStore;
 use rs_matter_embassy::stack::rand::{MatterRngCore, RngCore};
 use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
@@ -122,9 +122,12 @@ async fn main(_s: Spawner) {
     let mut ot_rng = MatterRngCore::new(stack.matter().rand());
     let ot_resources = Box::leak(Box::new_uninit()).init_with(OtMatterResources::init());
 
+    let mut ot_settings = RamSettings::new(&mut ot_resources.settings_buf, |_| false);
+
     let ot = OpenThread::new_with_udp_srp(
         ieee_eui64,
         &mut ot_rng,
+        &mut ot_settings,
         &mut ot_resources.ot,
         &mut ot_resources.udp,
         &mut ot_resources.srp,
@@ -182,6 +185,7 @@ async fn main(_s: Spawner) {
     // Run the Matter stack with our handler
     // Using `pin!` is completely optional, but saves some memory due to `rustc`
     // not being very intelligent w.r.t. stack usage in async functions
+    let store = stack.create_shared_store(DummyKvBlobStore);
     let mut matter = pin!(stack.run(
         // The Matter stack needs access to the netif so as to detect network going up/down
         OtNetif::new(ot),
@@ -190,7 +194,7 @@ async fn main(_s: Spawner) {
         // The Matter stack needs a persister to store its state
         // `EmbassyPersist`+`EmbassyKvBlobStore` saves to a user-supplied NOR Flash region
         // However, for this demo and for simplicity, we use a dummy persister that does nothing
-        DummyPersist,
+        &store,
         // Our `AsyncHandler` + `AsyncMetadata` impl
         (NODE, handler),
         // No user future to run

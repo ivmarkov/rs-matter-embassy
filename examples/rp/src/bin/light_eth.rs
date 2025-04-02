@@ -46,7 +46,7 @@ use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
 use rs_matter_embassy::rand::rp::rp_rand;
-use rs_matter_embassy::stack::persist::DummyPersist;
+use rs_matter_embassy::stack::persist::DummyKvBlobStore;
 use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
@@ -140,7 +140,7 @@ async fn main(spawner: Spawner) {
     // Statically allocate the Matter stack.
     // For MCUs, it is best to allocate it statically, so as to avoid program stack blowups (its memory footprint is ~ 35 to 50KB).
     // It is also (currently) a mandatory requirement when the wireless stack variation is used.
-    let stack = mk_static!(EmbassyEthMatterStack<()>).init_with(EmbassyEthMatterStack::init(
+    let stack = mk_static!(EmbassyEthMatterStack).init_with(EmbassyEthMatterStack::init(
         &BasicInfoConfig {
             vid: TEST_VID,
             pid: TEST_PID,
@@ -192,6 +192,7 @@ async fn main(spawner: Spawner) {
     // not being very intelligent w.r.t. stack usage in async functions
     //
     // This step can be repeated in that the stack can be stopped and started multiple times, as needed.
+    let store = stack.create_shared_store(DummyKvBlobStore);
     let mut matter = pin!(stack.run(
         // The Matter stack needs access to the netif so as to detect network going up/down
         EnetNetif::new(net_stack),
@@ -201,9 +202,7 @@ async fn main(spawner: Spawner) {
             &*mk_static!(EnetMatterUdpBuffers, EnetMatterUdpBuffers::new()),
         ),
         // The Matter stack needs a persister to store its state
-        // `EmbassyPersist`+`EmbassyKvBlobStore` saves to a user-supplied NOR Flash region
-        // However, for this demo and for simplicity, we use a dummy persister that does nothing
-        DummyPersist,
+        &store,
         // Our `AsyncHandler` + `AsyncMetadata` impl
         (NODE, handler),
         // No user future to run

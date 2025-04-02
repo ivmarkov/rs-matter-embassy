@@ -39,7 +39,7 @@ use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
 use rs_matter_embassy::rand::esp::{esp_init_rand, esp_rand};
-use rs_matter_embassy::stack::persist::DummyPersist;
+use rs_matter_embassy::stack::persist::DummyKvBlobStore;
 use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
@@ -151,6 +151,7 @@ async fn main(_s: Spawner) {
     // Run the Matter stack with our handler
     // Using `pin!` is completely optional, but saves some memory due to `rustc`
     // not being very intelligent w.r.t. stack usage in async functions
+    let store = stack.create_shared_store(DummyKvBlobStore);
     let mut matter = pin!(stack.run(
         // The Matter stack needs access to the netif so as to detect network going up/down
         EnetNetif::new(net_stack),
@@ -160,9 +161,7 @@ async fn main(_s: Spawner) {
             Box::leak(Box::new_uninit()).init_with(EnetMatterUdpBuffers::new())
         ),
         // The Matter stack needs a persister to store its state
-        // `EmbassyPersist`+`EmbassyKvBlobStore` saves to a user-supplied NOR Flash region
-        // However, for this demo and for simplicity, we use a dummy persister that does nothing
-        DummyPersist,
+        &store,
         // Our `AsyncHandler` + `AsyncMetadata` impl
         (NODE, handler),
         // No user future to run

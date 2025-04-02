@@ -1,4 +1,4 @@
-//! An example utilizing the `EmbassyThreadNCMatterStack` struct.
+//! An example utilizing the `EmbassyThreadMatterStack` struct.
 //!
 //! As the name suggests, this Matter stack assembly uses Thread as the main transport,
 //! and thus BLE for commissioning, in non-concurrent commissioning mode
@@ -32,19 +32,16 @@ use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
 use rs_matter_embassy::matter::{BasicCommData, MATTER_PORT};
-use rs_matter_embassy::ot::OtMatterResources;
 use rs_matter_embassy::rand::esp::{esp_init_rand, esp_rand};
 use rs_matter_embassy::stack::mdns::MatterMdnsServices;
-use rs_matter_embassy::stack::persist::DummyPersist;
-use rs_matter_embassy::stack::rand::{MatterRngCore, RngCore};
+use rs_matter_embassy::stack::persist::DummyKvBlobStore;
+use rs_matter_embassy::stack::rand::RngCore;
 use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
 use rs_matter_embassy::stack::MdnsType;
-use rs_matter_embassy::wireless::esp::EspBleController;
-use rs_matter_embassy::wireless::thread::esp::EspThreadRadio;
-use rs_matter_embassy::wireless::thread::{EmbassyThread, EmbassyThreadNCMatterStack};
-use rs_matter_embassy::wireless::EmbassyBle;
+use rs_matter_embassy::wireless::thread::esp::EspThreadDriver;
+use rs_matter_embassy::wireless::thread::{EmbassyThread, EmbassyThreadMatterStack};
 
 use tinyrlibc as _;
 
@@ -87,10 +84,6 @@ async fn main(_s: Spawner) {
 
     let init = esp_wifi::init(timg0.timer0, rng, peripherals.RADIO_CLK).unwrap();
 
-    // TODO: Rather than doing this here, move the `esp_wifi::init` call to the `EmbassyWifi` impl
-    // Also see https://github.com/esp-rs/esp-hal/issues/3239
-    let radio_clk_ieee802154 = unsafe { esp_hal::peripherals::RADIO_CLK::steal() };
-
     #[cfg(not(feature = "esp32"))]
     {
         esp_hal_embassy::init(
@@ -113,7 +106,7 @@ async fn main(_s: Spawner) {
     // Allocate the Matter stack.
     // For MCUs, it is best to allocate it statically, so as to avoid program stack blowups (its memory footprint is ~ 35 to 50KB).
     // It is also (currently) a mandatory requirement when the wireless stack variation is used.
-    let stack = &*Box::leak(Box::new_uninit()).init_with(EmbassyThreadNCMatterStack::<()>::init(
+    let stack = &*Box::leak(Box::new_uninit()).init_with(EmbassyThreadMatterStack::<()>::init(
         &TEST_BASIC_INFO,
         BasicCommData {
             password: TEST_BASIC_COMM_DATA.password,
@@ -156,25 +149,18 @@ async fn main(_s: Spawner) {
     // not being very intelligent w.r.t. stack usage in async functions
     //
     // This step can be repeated in that the stack can be stopped and started multiple times, as needed.
-    let mut ot_rng = MatterRngCore::new(stack.matter().rand());
-    let ot_resources = &mut *Box::leak(Box::new_uninit()).init_with(OtMatterResources::init());
-
+    let store = stack.create_shared_store(DummyKvBlobStore);
     let mut matter = pin!(stack.run(
         // The Matter stack needs to instantiate an `openthread` Radio
         EmbassyThread::new(
-            EspThreadRadio::new(peripherals.IEEE802154, radio_clk_ieee802154),
+            EspThreadDriver::new(&init, peripherals.IEEE802154, peripherals.BT),
             mdns_services,
-            ot_resources,
             ieee_eui64,
-            &mut ot_rng,
-        )
-        .unwrap(),
-        // The Matter stack needs BLE
-        EmbassyBle::new(EspBleController::new(&init, peripherals.BT), stack),
+            &store,
+            stack,
+        ),
         // The Matter stack needs a persister to store its state
-        // `EmbassyPersist`+`EmbassyKvBlobStore` saves to a user-supplied NOR Flash region
-        // However, for this demo and for simplicity, we use a dummy persister that does nothing
-        DummyPersist,
+        &store,
         // Our `AsyncHandler` + `AsyncMetadata` impl
         (NODE, handler),
         // No user future to run
@@ -230,7 +216,7 @@ const LIGHT_ENDPOINT_ID: u16 = 1;
 const NODE: Node = Node {
     id: 0,
     endpoints: &[
-        EmbassyThreadNCMatterStack::<()>::root_metadata(),
+        EmbassyThreadMatterStack::<()>::root_metadata(),
         Endpoint {
             id: LIGHT_ENDPOINT_ID,
             device_types: &[DEV_TYPE_ON_OFF_LIGHT],

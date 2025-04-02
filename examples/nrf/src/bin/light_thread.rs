@@ -2,7 +2,6 @@
 //!
 //! As the name suggests, this Matter stack assembly uses Thread as the main transport,
 //! and thus BLE for commissioning).
-//! TODO: below is not implemented for Nordic yet
 //!
 //! The example implements a fictitious Light device (an On-Off Matter cluster).
 #![no_std]
@@ -35,21 +34,19 @@ use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
 use rs_matter_embassy::matter::{BasicCommData, MATTER_PORT};
-use rs_matter_embassy::ot::OtMatterResources;
 use rs_matter_embassy::rand::nrf::{nrf_init_rand, nrf_rand};
 use rs_matter_embassy::stack::mdns::MatterMdnsServices;
-use rs_matter_embassy::stack::persist::DummyPersist;
-use rs_matter_embassy::stack::rand::{MatterRngCore, RngCore};
+use rs_matter_embassy::stack::persist::DummyKvBlobStore;
+use rs_matter_embassy::stack::rand::RngCore;
 use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
 use rs_matter_embassy::stack::MdnsType;
-use rs_matter_embassy::wireless::nrf::NrfBleController;
 use rs_matter_embassy::wireless::thread::nrf::{
-    NrfThreadRadio, NrfThreadRadioInterruptHandler, NrfThreadRadioResources, NrfThreadRadioRunner,
+    NrfBleClockInterruptHandler, NrfBleHighPrioInterruptHandler, NrfBleLowPrioInterruptHandler,
+    NrfThreadDriver, NrfThreadRadioInterruptHandler, NrfThreadRadioResources, NrfThreadRadioRunner,
 };
-use rs_matter_embassy::wireless::thread::{EmbassyThread, EmbassyThreadNCMatterStack};
-use rs_matter_embassy::wireless::EmbassyBle;
+use rs_matter_embassy::wireless::thread::{EmbassyThread, EmbassyThreadMatterStack};
 
 use panic_rtt_target as _;
 
@@ -74,11 +71,11 @@ macro_rules! mk_static {
 
 bind_interrupts!(struct Irqs {
     RNG => rng::InterruptHandler<RNG>;
-    EGU0_SWI0 => rs_matter_embassy::wireless::nrf::NrfBleLowPrioInterruptHandler;
-    CLOCK_POWER => rs_matter_embassy::wireless::nrf::NrfBleClockInterruptHandler;
-    RADIO => rs_matter_embassy::wireless::nrf::NrfBleHighPrioInterruptHandler, NrfThreadRadioInterruptHandler;
-    TIMER0 => rs_matter_embassy::wireless::nrf::NrfBleHighPrioInterruptHandler;
-    RTC0 => rs_matter_embassy::wireless::nrf::NrfBleHighPrioInterruptHandler;
+    EGU0_SWI0 => NrfBleLowPrioInterruptHandler;
+    CLOCK_POWER => NrfBleClockInterruptHandler;
+    RADIO => NrfBleHighPrioInterruptHandler, NrfThreadRadioInterruptHandler;
+    TIMER0 => NrfBleHighPrioInterruptHandler;
+    RTC0 => NrfBleHighPrioInterruptHandler;
 });
 
 #[interrupt]
@@ -145,20 +142,20 @@ async fn main(_s: Spawner) {
     // Allocate the Matter stack.
     // For MCUs, it is best to allocate it statically, so as to avoid program stack blowups (its memory footprint is ~ 35 to 50KB).
     // It is also (currently) a mandatory requirement when the wireless stack variation is used.
-    let stack =
-        mk_static!(EmbassyThreadNCMatterStack<()>).init_with(EmbassyThreadNCMatterStack::init(
-            &TEST_BASIC_INFO,
-            BasicCommData {
-                password: TEST_BASIC_COMM_DATA.password,
-                discriminator,
-            },
-            &TEST_DEV_ATT,
-            MdnsType::Provided(mdns_services),
-            epoch,
-            nrf_rand,
-        ));
+    let stack = mk_static!(EmbassyThreadMatterStack).init_with(EmbassyThreadMatterStack::init(
+        &TEST_BASIC_INFO,
+        BasicCommData {
+            password: TEST_BASIC_COMM_DATA.password,
+            discriminator,
+        },
+        &TEST_DEV_ATT,
+        MdnsType::Provided(mdns_services),
+        epoch,
+        nrf_rand,
+    ));
 
-    let nrf_ble_controller = NrfBleController::new(
+    let (thread_driver, thread_radio_runner) = NrfThreadDriver::new(
+        mk_static!(NrfThreadRadioResources, NrfThreadRadioResources::new()),
         p.RADIO,
         p.RTC0,
         p.TIMER0,
@@ -182,13 +179,6 @@ async fn main(_s: Spawner) {
         Irqs,
     );
 
-    // TODO: Share the radio peripheral between the BLE and Thread stacks
-    let (nrf_radio, nrf_radio_runner) = NrfThreadRadio::new(
-        mk_static!(NrfThreadRadioResources, NrfThreadRadioResources::new()),
-        unsafe { embassy_nrf::peripherals::RADIO::steal() },
-        Irqs,
-    );
-
     // High-priority executor: EGU1_SWI1, priority level 6
     interrupt::EGU1_SWI1.set_priority(Priority::P6);
 
@@ -197,7 +187,7 @@ async fn main(_s: Spawner) {
     // hence these are emulated in software, so low latency is crucial
     RADIO_EXECUTOR
         .start(interrupt::EGU1_SWI1)
-        .spawn(run_radio(nrf_radio_runner))
+        .spawn(run_radio(thread_radio_runner))
         .unwrap();
 
     // == Step 4: ==
@@ -231,24 +221,12 @@ async fn main(_s: Spawner) {
     // not being very intelligent w.r.t. stack usage in async functions
     //
     // This step can be repeated in that the stack can be stopped and started multiple times, as needed.
-    let mut ot_rng = MatterRngCore::new(stack.matter().rand());
-    let ot_resources = mk_static!(OtMatterResources).init_with(OtMatterResources::init());
+    let store = stack.create_shared_store(DummyKvBlobStore);
     let mut matter = pin!(stack.run(
         // The Matter stack needs to instantiate `openthread`
-        EmbassyThread::new(
-            nrf_radio,
-            mdns_services,
-            ot_resources,
-            ieee_eui64,
-            &mut ot_rng
-        )
-        .unwrap(),
-        // The Matter stack needs BLE
-        EmbassyBle::new(nrf_ble_controller, stack),
+        EmbassyThread::new(thread_driver, mdns_services, ieee_eui64, &store, stack),
         // The Matter stack needs a persister to store its state
-        // `EmbassyPersist`+`EmbassyKvBlobStore` saves to a user-supplied NOR Flash region
-        // However, for this demo and for simplicity, we use a dummy persister that does nothing
-        DummyPersist,
+        &store,
         // Our `AsyncHandler` + `AsyncMetadata` impl
         (NODE, handler),
         // No user future to run
@@ -304,7 +282,7 @@ const LIGHT_ENDPOINT_ID: u16 = 1;
 const NODE: Node = Node {
     id: 0,
     endpoints: &[
-        EmbassyThreadNCMatterStack::<()>::root_metadata(),
+        EmbassyThreadMatterStack::<()>::root_metadata(),
         Endpoint {
             id: LIGHT_ENDPOINT_ID,
             device_types: &[DEV_TYPE_ON_OFF_LIGHT],

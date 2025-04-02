@@ -33,15 +33,13 @@ use rs_matter_embassy::matter::data_model::system_model::descriptor;
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
 use rs_matter_embassy::rand::esp::{esp_init_rand, esp_rand};
-use rs_matter_embassy::stack::persist::DummyPersist;
+use rs_matter_embassy::stack::persist::DummyKvBlobStore;
 use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
 use rs_matter_embassy::stack::MdnsType;
-use rs_matter_embassy::wireless::esp::EspBleController;
 use rs_matter_embassy::wireless::wifi::esp::EspWifiDriver;
 use rs_matter_embassy::wireless::wifi::{EmbassyWifi, EmbassyWifiMatterStack};
-use rs_matter_embassy::wireless::EmbassyBle;
 
 extern crate alloc;
 
@@ -141,15 +139,15 @@ async fn main(_s: Spawner) {
     // not being very intelligent w.r.t. stack usage in async functions
     //
     // This step can be repeated in that the stack can be stopped and started multiple times, as needed.
+    let store = stack.create_shared_store(DummyKvBlobStore);
     let mut matter = pin!(stack.run(
         // The Matter stack needs to instantiate an `embassy-net` `Driver` and `Controller`
-        EmbassyWifi::new(EspWifiDriver::new(&init, peripherals.WIFI), stack),
-        // The Matter stack needs BLE
-        EmbassyBle::new(EspBleController::new(&init, peripherals.BT), stack),
+        EmbassyWifi::new(
+            EspWifiDriver::new(&init, peripherals.WIFI, peripherals.BT),
+            stack
+        ),
         // The Matter stack needs a persister to store its state
-        // `EmbassyPersist`+`EmbassyKvBlobStore` saves to a user-supplied NOR Flash region
-        // However, for this demo and for simplicity, we use a dummy persister that does nothing
-        DummyPersist,
+        &store,
         // Our `AsyncHandler` + `AsyncMetadata` impl
         (NODE, handler),
         // No user future to run
