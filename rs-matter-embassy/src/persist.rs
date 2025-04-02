@@ -8,14 +8,14 @@ use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 use log::info;
 
 use rs_matter_stack::matter::error::Error;
-use rs_matter_stack::persist::{Key, KvBlobStore, KvPersist};
+use rs_matter_stack::persist::{KvBlobStore, MatterPersist};
 
 use sequential_storage::cache::NoCache;
 use sequential_storage::map::{SerializationError, Value};
 
 use crate::error::to_persist_error;
 
-pub type EmbassyPersist<'a, S, N> = KvPersist<'a, EmbassyKvBlobStore<S>, N>;
+pub type EmbassyPersist<'a, S, N> = MatterPersist<'a, EmbassyKvBlobStore<S>, N>;
 
 /// We expect closures, but `sequential_storage::map` operates on `Value` instances
 /// (which is less flexible).
@@ -24,7 +24,7 @@ pub type EmbassyPersist<'a, S, N> = KvPersist<'a, EmbassyKvBlobStore<S>, N>;
 /// Only used during serialization.
 ///
 /// (For deserialization, we take advantage of zero-copy, and pass `&[u8]` as `Value`.)
-struct StoreValue<F>(Key, RefCell<Option<F>>);
+struct StoreValue<F>(u16, RefCell<Option<F>>);
 
 impl<'d, F> Value<'d> for StoreValue<F>
 where
@@ -70,7 +70,7 @@ where
         }
     }
 
-    async fn load<F>(&mut self, key: Key, buf: &mut [u8], cb: F) -> Result<(), Error>
+    async fn load<F>(&mut self, key: u16, buf: &mut [u8], cb: F) -> Result<(), Error>
     where
         F: FnOnce(Option<&[u8]>) -> Result<(), Error>,
     {
@@ -79,7 +79,7 @@ where
             self.flash_range.clone(),
             &mut self.cache,
             buf,
-            &[key as u8],
+            &key,
         )
         .await
         .map_err(to_persist_error)?;
@@ -94,7 +94,7 @@ where
         Ok(())
     }
 
-    async fn store<F>(&mut self, key: Key, buf: &mut [u8], cb: F) -> Result<(), Error>
+    async fn store<F>(&mut self, key: u16, buf: &mut [u8], cb: F) -> Result<(), Error>
     where
         F: FnOnce(&mut [u8]) -> Result<usize, Error>,
     {
@@ -105,7 +105,7 @@ where
             self.flash_range.clone(),
             &mut self.cache,
             buf,
-            &(key as u8),
+            &key,
             &value,
         )
         .await
@@ -114,13 +114,13 @@ where
         Ok(())
     }
 
-    async fn remove(&mut self, key: Key, buf: &mut [u8]) -> Result<(), Error> {
+    async fn remove(&mut self, key: u16, buf: &mut [u8]) -> Result<(), Error> {
         sequential_storage::map::remove_item(
             &mut self.flash,
             self.flash_range.clone(),
             &mut self.cache,
             buf,
-            &[key as u8],
+            &key,
         )
         .await
         .map_err(to_persist_error)?;
@@ -135,21 +135,21 @@ impl<S> KvBlobStore for EmbassyKvBlobStore<S>
 where
     S: MultiwriteNorFlash,
 {
-    async fn load<F>(&mut self, key: Key, buf: &mut [u8], f: F) -> Result<(), Error>
+    async fn load<F>(&mut self, key: u16, buf: &mut [u8], f: F) -> Result<(), Error>
     where
         F: FnOnce(Option<&[u8]>) -> Result<(), Error>,
     {
         EmbassyKvBlobStore::load(self, key, buf, f).await
     }
 
-    async fn store<F>(&mut self, key: Key, buf: &mut [u8], f: F) -> Result<(), Error>
+    async fn store<F>(&mut self, key: u16, buf: &mut [u8], f: F) -> Result<(), Error>
     where
         F: FnOnce(&mut [u8]) -> Result<usize, Error>,
     {
         EmbassyKvBlobStore::store(self, key, buf, f).await
     }
 
-    async fn remove(&mut self, key: Key, buf: &mut [u8]) -> Result<(), Error> {
+    async fn remove(&mut self, key: u16, buf: &mut [u8]) -> Result<(), Error> {
         EmbassyKvBlobStore::remove(self, key, buf).await
     }
 }

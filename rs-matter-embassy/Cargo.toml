@@ -20,9 +20,9 @@ harness = false
 #[patch.'https://github.com/embassy-rs/trouble']
 #trouble-host = { version = "0.1", path = "../../../trouble/host" }
 [patch.'https://github.com/esp-rs/esp-openthread']
-openthread = { version = "0.1", git = "https://github.com/ivmarkov/esp-openthread", branch = "next" }
+openthread = { version = "0.1", git = "https://github.com/ivmarkov/esp-openthread", branch = "settings" }
 #[patch.'https://github.com/esp-rs/esp-openthread']
-#openthread = { version = "0.1", path = "../../esp-openthread/openthread" }
+#openthread = { version = "0.1", path = "../../../esp-openthread/openthread" }
 
 [patch.crates-io]
 #rs-matter = { git = "https://github.com/project-chip/rs-matter" }
@@ -38,7 +38,7 @@ debug = true
 opt-level = "z"
 
 [features]
-default = ["rs-matter-stack", "openthread"]
+default = ["rs-matter-stack"]
 embassy-net = ["dep:embassy-net", "dep:edge-nal-embassy"]
 esp = ["esp-wifi", "esp-hal", "openthread?/esp-ieee802154"]
 rp = ["cyw43", "cyw43-pio", "embassy-rp", "rand_core"]
