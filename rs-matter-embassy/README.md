@@ -22,7 +22,7 @@ Everything necessary to run [`rs-matter`](https://github.com/project-chip/rs-mat
 //! and thus BLE for commissioning.
 //!
 //! If you want to use Ethernet, utilize `EmbassyEthMatterStack` instead.
-//! If you want to use non-concurrent commissioning, utilize `EmbassyWifiNCMatterStack` instead
+//! If you want to use concurrent commissioning, call `run_coex` instead of `run`.
 //! (Note: Alexa does not work (yet) with non-concurrent commissioning.)
 //!
 //! The example implements a fictitious Light device (an On-Off Matter cluster).
