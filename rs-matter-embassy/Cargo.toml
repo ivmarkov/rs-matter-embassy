@@ -39,7 +39,7 @@ opt-level = "z"
 
 [features]
 default = ["rs-matter-stack"]
-embassy-net = ["dep:embassy-net", "dep:edge-nal-embassy"]
+embassy-net = ["dep:embassy-net", "edge-nal-embassy", "openthread?/embassy-net-driver-channel"]
 esp = ["esp-wifi", "esp-hal", "openthread?/esp-ieee802154"]
 rp = ["cyw43", "cyw43-pio", "embassy-rp", "rand_core"]
 nrf = ["embassy-nrf", "rand_core", "nrf-sdc", "nrf-mpsl", "portable-atomic", "openthread?/embassy-nrf"]

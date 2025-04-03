@@ -7,14 +7,12 @@
 //#![warn(clippy::large_stack_frames)]
 #![warn(clippy::large_types_passed_by_value)]
 
-#[cfg(feature = "rs-matter-stack")]
-pub use eth::*;
 pub mod ble;
 #[cfg(feature = "embassy-net")]
 pub mod enet;
 pub mod epoch;
 pub mod error;
-#[cfg(feature = "rs-matter-stack")]
+#[cfg(all(feature = "rs-matter-stack", feature = "embassy-net"))]
 pub mod eth;
 pub mod matter;
 #[cfg(feature = "openthread")]

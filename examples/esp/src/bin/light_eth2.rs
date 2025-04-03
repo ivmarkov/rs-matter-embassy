@@ -1,4 +1,4 @@
-//! An example utilizing the `EmbassyEthMatterStack` struct.
+//! An example utilizing the `EthMatterStack` struct directly from `rs-matter-stack`.
 //! As the name suggests, this Matter stack assembly uses Ethernet as the main transport, as well as for commissioning.
 //!
 //! Notice thart we actually don't use Ethernet for real, as ESP32s don't have Ethernet ports out of the box.
@@ -38,6 +38,7 @@ use rs_matter_embassy::ot::openthread::esp::EspRadio;
 use rs_matter_embassy::ot::openthread::{OpenThread, RamSettings};
 use rs_matter_embassy::ot::{OtMatterResources, OtMdns, OtNetif};
 use rs_matter_embassy::rand::esp::{esp_init_rand, esp_rand};
+use rs_matter_embassy::stack::eth::EthMatterStack;
 use rs_matter_embassy::stack::mdns::MatterMdnsServices;
 use rs_matter_embassy::stack::persist::DummyKvBlobStore;
 use rs_matter_embassy::stack::rand::{MatterRngCore, RngCore};
@@ -45,7 +46,6 @@ use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
 use rs_matter_embassy::stack::MdnsType;
-use rs_matter_embassy::EmbassyEthMatterStack;
 
 use tinyrlibc as _;
 
@@ -107,7 +107,7 @@ async fn main(_s: Spawner) {
 
     // == Step 3: ==
     // Allocate the Matter stack.
-    let stack = Box::leak(Box::new_uninit()).init_with(EmbassyEthMatterStack::<()>::init(
+    let stack = Box::leak(Box::new_uninit()).init_with(EthMatterStack::<()>::init(
         &TEST_BASIC_INFO,
         BasicCommData {
             password: TEST_BASIC_COMM_DATA.password,
@@ -186,7 +186,7 @@ async fn main(_s: Spawner) {
     // Using `pin!` is completely optional, but saves some memory due to `rustc`
     // not being very intelligent w.r.t. stack usage in async functions
     let store = stack.create_shared_store(DummyKvBlobStore);
-    let mut matter = pin!(stack.run(
+    let mut matter = pin!(stack.run_preex(
         // The Matter stack needs access to the netif so as to detect network going up/down
         OtNetif::new(ot),
         // The Matter stack needs to open two UDP sockets
@@ -258,7 +258,7 @@ const LIGHT_ENDPOINT_ID: u16 = 1;
 const NODE: Node = Node {
     id: 0,
     endpoints: &[
-        EmbassyEthMatterStack::<()>::root_metadata(),
+        EthMatterStack::<()>::root_metadata(),
         Endpoint {
             id: LIGHT_ENDPOINT_ID,
             device_types: &[DEV_TYPE_ON_OFF_LIGHT],

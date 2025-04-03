@@ -1,4 +1,4 @@
-//! An example utilizing the `EmbassyEthMatterStack` struct.
+//! An example utilizing the `EthMatterStack` struct directly from `rs-matter-stack`.
 //! As the name suggests, this Matter stack assembly uses Ethernet as the main transport, as well as for commissioning.
 //!
 //! Notice thart we actually don't use Ethernet for real, as NRFs don't have Ethernet ports out of the box.
@@ -46,6 +46,7 @@ use rs_matter_embassy::ot::openthread::{
 };
 use rs_matter_embassy::ot::{OtMatterResources, OtMdns, OtNetif};
 use rs_matter_embassy::rand::nrf::{nrf_init_rand, nrf_rand};
+use rs_matter_embassy::stack::eth::EthMatterStack;
 use rs_matter_embassy::stack::mdns::MatterMdnsServices;
 use rs_matter_embassy::stack::persist::DummyKvBlobStore;
 use rs_matter_embassy::stack::rand::{MatterRngCore, RngCore};
@@ -53,7 +54,6 @@ use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
 use rs_matter_embassy::stack::MdnsType;
-use rs_matter_embassy::EmbassyEthMatterStack;
 
 use panic_rtt_target as _;
 
@@ -147,7 +147,7 @@ async fn main(_s: Spawner) {
     // Allocate the Matter stack.
     // For MCUs, it is best to allocate it statically, so as to avoid program stack blowups (its memory footprint is ~ 35 to 50KB).
     // It is also (currently) a mandatory requirement when the wireless stack variation is used.
-    let stack = mk_static!(EmbassyEthMatterStack).init_with(EmbassyEthMatterStack::init(
+    let stack = mk_static!(EthMatterStack).init_with(EthMatterStack::init(
         &TEST_BASIC_INFO,
         BasicCommData {
             password: TEST_BASIC_COMM_DATA.password,
@@ -242,7 +242,7 @@ async fn main(_s: Spawner) {
     //
     // This step can be repeated in that the stack can be stopped and started multiple times, as needed.
     let store = stack.create_shared_store(DummyKvBlobStore);
-    let mut matter = pin!(stack.run(
+    let mut matter = pin!(stack.run_preex(
         // The Matter stack needs access to the netif so as to detect network going up/down
         OtNetif::new(ot),
         // The Matter stack needs to open two UDP sockets
@@ -312,7 +312,7 @@ const LIGHT_ENDPOINT_ID: u16 = 1;
 const NODE: Node = Node {
     id: 0,
     endpoints: &[
-        EmbassyEthMatterStack::<()>::root_metadata(),
+        EthMatterStack::<()>::root_metadata(),
         Endpoint {
             id: LIGHT_ENDPOINT_ID,
             device_types: &[DEV_TYPE_ON_OFF_LIGHT],

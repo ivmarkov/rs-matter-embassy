@@ -18,7 +18,7 @@ use rs_matter_stack::mdns::MatterMdnsServices;
 use rs_matter_stack::network::{Embedding, Network};
 use rs_matter_stack::persist::{KvBlobStore, SharedKvBlobStore};
 use rs_matter_stack::rand::MatterRngCore;
-use rs_matter_stack::wireless::traits::{
+use rs_matter_stack::wireless::{
     Controller, Gatt, GattTask, NetworkCredentials, Thread, ThreadData, ThreadId, ThreadScanResult,
     Wireless, WirelessCoex, WirelessCoexTask, WirelessData, WirelessTask,
 };
@@ -53,9 +53,10 @@ where
     }
 }
 
-/// A trait representing a task that needs access to the Thread radio to perform its work
+/// A trait representing a task that needs access to the Thread radio,
+/// as well as to the BLE controller to perform its work
 pub trait ThreadCoexDriverTask {
-    /// Run the task with the given Thread radio
+    /// Run the task with the given Thread radio and BLE controller
     async fn run<R, B>(&mut self, radio: R, ble_controller: B) -> Result<(), Error>
     where
         R: Radio,
@@ -75,7 +76,7 @@ where
     }
 }
 
-/// A companion trait of `EmbassyThread` for providing a Thread radio.
+/// A trait for running a task within a context where the Thread radio is initialized and operable
 pub trait ThreadDriver {
     /// Setup the Thread radio and run the given task with it
     async fn run<A>(&mut self, task: A) -> Result<(), Error>
@@ -95,9 +96,9 @@ where
     }
 }
 
-/// A companion trait of `EmbassyThread` for providing a Thread radio.
+/// A trait for running a task within a context where the Thread radio - as well as the BLE controller - are initialized and operable
 pub trait ThreadCoexDriver {
-    /// Setup the Thread radio and run the given task with it
+    /// Setup the Thread radio and the BLE controller and run the given task with these
     async fn run<A>(&mut self, task: A) -> Result<(), Error>
     where
         A: ThreadCoexDriverTask;
@@ -179,7 +180,7 @@ where
     T: ThreadDriver,
     S: KvBlobStore,
 {
-    /// Create a new instance of the `EmbassyWifi` type.
+    /// Create a new instance of the `EmbassyThread` type.
     pub fn new<E>(
         driver: T,
         mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
@@ -201,7 +202,7 @@ where
         )
     }
 
-    /// Create a new instance of the `EmbassyThread` type.
+    /// Wrap an existing `ThreadDriver` with the given parameters.
     pub fn wrap(
         driver: T,
         mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
@@ -610,7 +611,7 @@ fn to_matter_err(err: OtError) -> Error {
 }
 
 #[cfg(feature = "esp")]
-pub mod esp {
+pub mod esp_thread {
     use bt_hci::controller::ExternalController;
     use esp_hal::peripheral::{Peripheral, PeripheralRef};
 

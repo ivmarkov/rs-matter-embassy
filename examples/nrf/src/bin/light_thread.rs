@@ -42,11 +42,11 @@ use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
 use rs_matter_embassy::stack::MdnsType;
-use rs_matter_embassy::wireless::thread::nrf::{
+use rs_matter_embassy::wireless::nrf::{
     NrfBleClockInterruptHandler, NrfBleHighPrioInterruptHandler, NrfBleLowPrioInterruptHandler,
     NrfThreadDriver, NrfThreadRadioInterruptHandler, NrfThreadRadioResources, NrfThreadRadioRunner,
 };
-use rs_matter_embassy::wireless::thread::{EmbassyThread, EmbassyThreadMatterStack};
+use rs_matter_embassy::wireless::{EmbassyThread, EmbassyThreadMatterStack};
 
 use panic_rtt_target as _;
 

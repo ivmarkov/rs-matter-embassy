@@ -6,19 +6,32 @@ use rs_matter_stack::matter::error::Error;
 use rs_matter_stack::matter::tlv::{FromTLV, ToTLV};
 use rs_matter_stack::matter::utils::init::{init, Init};
 use rs_matter_stack::network::{Embedding, Network};
-use rs_matter_stack::wireless::traits::{WirelessConfig, WirelessData};
-use rs_matter_stack::{MatterStack, WirelessBle};
+use rs_matter_stack::wireless::{WirelessBle, WirelessConfig, WirelessData};
+use rs_matter_stack::MatterStack;
 
 use trouble_host::Controller;
 
 use crate::ble::{TroubleBtpGattContext, TroubleBtpGattPeripheral};
 
+#[cfg(feature = "openthread")]
+pub use thread::*;
+#[cfg(feature = "embassy-net")]
+pub use wifi::*;
+
 // Thread: Type aliases and state structs for an Embassy Matter stack running over a Thread network and BLE.
 #[cfg(feature = "openthread")]
-pub mod thread;
+mod thread;
 // Wifi: Type aliases and state structs for an Embassy Matter stack running over a Wifi network and BLE.
 #[cfg(feature = "embassy-net")]
-pub mod wifi;
+mod wifi;
+
+#[cfg(feature = "esp")]
+pub mod esp {
+    #[cfg(feature = "openthread")]
+    pub use super::thread::esp_thread::*;
+    #[cfg(feature = "embassy-net")]
+    pub use super::wifi::esp_wifi::*;
+}
 
 /// A type alias for an Embassy Matter stack running over a wireless network (Wifi or Thread) and BLE.
 pub type EmbassyWirelessMatterStack<'a, T, N, E = ()> =

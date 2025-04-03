@@ -16,7 +16,7 @@ use core::pin::pin;
 use alloc::boxed::Box;
 
 use embassy_executor::Spawner;
-use embassy_futures::select::select4;
+use embassy_futures::select::select3;
 use embassy_time::{Duration, Timer};
 
 use esp_backtrace as _;
@@ -27,10 +27,8 @@ use esp_wifi::wifi::{
 
 use log::info;
 
-use rs_matter_embassy::enet::{
-    create_enet_stack, EnetMatterStackResources, EnetMatterUdpBuffers, EnetNetif, Udp,
-};
 use rs_matter_embassy::epoch::epoch;
+use rs_matter_embassy::eth::{EmbassyEthMatterStack, EmbassyEthernet, PreexistingEthDriver};
 use rs_matter_embassy::matter::data_model::cluster_basic_information::BasicInfoConfig;
 use rs_matter_embassy::matter::data_model::cluster_on_off;
 use rs_matter_embassy::matter::data_model::device_types::DEV_TYPE_ON_OFF_LIGHT;
@@ -45,7 +43,6 @@ use rs_matter_embassy::stack::test_device::{
 };
 use rs_matter_embassy::stack::utils::futures::IntoFaillble;
 use rs_matter_embassy::stack::MdnsType;
-use rs_matter_embassy::EmbassyEthMatterStack;
 
 extern crate alloc;
 
@@ -73,7 +70,7 @@ async fn main(_s: Spawner) {
     init_heap();
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
-    let mut rng = esp_hal::rng::Rng::new(peripherals.RNG);
+    let rng = esp_hal::rng::Rng::new(peripherals.RNG);
 
     // To erase generics, `Matter` takes a rand `fn` rather than a trait or a closure,
     // so we need to initialize the global `rand` fn once
@@ -118,12 +115,6 @@ async fn main(_s: Spawner) {
     let (wifi_interface, controller) =
         esp_wifi::wifi::new_with_mode(&init, wifi, WifiStaDevice).unwrap();
 
-    let (net_stack, mut net_runner) = create_enet_stack(
-        wifi_interface,
-        ((rng.random() as u64) << 32) | rng.random() as u64,
-        Box::leak(Box::new_uninit()).init_with(EnetMatterStackResources::new()),
-    );
-
     // Our "light" on-off cluster.
     // Can be anything implementing `rs_matter::data_model::AsyncHandler`
     let on_off = cluster_on_off::OnOffCluster::new(Dataver::new_rand(stack.matter().rand()));
@@ -153,13 +144,8 @@ async fn main(_s: Spawner) {
     // not being very intelligent w.r.t. stack usage in async functions
     let store = stack.create_shared_store(DummyKvBlobStore);
     let mut matter = pin!(stack.run(
-        // The Matter stack needs access to the netif so as to detect network going up/down
-        EnetNetif::new(net_stack),
-        // The Matter stack needs to open two UDP sockets
-        Udp::new(
-            net_stack,
-            Box::leak(Box::new_uninit()).init_with(EnetMatterUdpBuffers::new())
-        ),
+        // The Matter stack needs the ethernet inteface to run
+        EmbassyEthernet::new(PreexistingEthDriver::new(wifi_interface), &stack),
         // The Matter stack needs a persister to store its state
         &store,
         // Our `AsyncHandler` + `AsyncMetadata` impl
@@ -190,15 +176,10 @@ async fn main(_s: Spawner) {
     });
 
     // Schedule the Matter run & the device loop together
-    select4(
+    select3(
         &mut matter,
         &mut device,
         connection(controller).into_fallible(),
-        async {
-            net_runner.run().await;
-            #[allow(unreachable_code)]
-            Ok(())
-        },
     )
     .coalesce()
     .await

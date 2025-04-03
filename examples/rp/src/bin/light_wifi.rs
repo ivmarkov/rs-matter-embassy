@@ -53,10 +53,8 @@ use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
 use rs_matter_embassy::stack::MdnsType;
-use rs_matter_embassy::wireless::wifi::rp::Cyw43WifiController;
-use rs_matter_embassy::wireless::wifi::{
-    EmbassyWifi, EmbassyWifiMatterStack, PreexistingWifiDriver,
-};
+use rs_matter_embassy::wireless::rp::Cyw43WifiController;
+use rs_matter_embassy::wireless::{EmbassyWifi, EmbassyWifiMatterStack, PreexistingWifiDriver};
 
 use rtt_target::rtt_init_log;
 

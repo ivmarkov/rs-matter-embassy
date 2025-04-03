@@ -40,8 +40,8 @@ use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
 use rs_matter_embassy::stack::MdnsType;
-use rs_matter_embassy::wireless::thread::esp::EspThreadDriver;
-use rs_matter_embassy::wireless::thread::{EmbassyThread, EmbassyThreadMatterStack};
+use rs_matter_embassy::wireless::esp::EspThreadDriver;
+use rs_matter_embassy::wireless::{EmbassyThread, EmbassyThreadMatterStack};
 
 use tinyrlibc as _;
 

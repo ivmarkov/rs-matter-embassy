@@ -1,4 +1,3 @@
-use core::mem::MaybeUninit;
 use core::pin::pin;
 
 use edge_nal_embassy::Udp;
@@ -8,18 +7,17 @@ use embassy_futures::select::select;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 
 use rs_matter_stack::matter::error::Error;
-use rs_matter_stack::matter::utils::init::{init, Init};
 use rs_matter_stack::matter::utils::rand::Rand;
 use rs_matter_stack::matter::utils::select::Coalesce;
-use rs_matter_stack::matter::utils::sync::IfMutex;
 use rs_matter_stack::network::{Embedding, Network};
-use rs_matter_stack::wireless::traits::{
+use rs_matter_stack::wireless::{
     Controller, Gatt, GattTask, Wifi, WifiData, Wireless, WirelessCoex, WirelessCoexTask,
     WirelessTask,
 };
 
 use crate::ble::{ControllerRef, TroubleBtpGattContext, TroubleBtpGattPeripheral};
-use crate::enet::{create_enet_stack, EnetMatterStackResources, EnetMatterUdpBuffers, EnetNetif};
+use crate::enet::{create_enet_stack, EnetNetif};
+use crate::eth::EmbassyNetContext;
 
 use super::{BleDriver, BleDriverTask, EmbassyWirelessMatterStack};
 
@@ -27,7 +25,9 @@ use super::{BleDriver, BleDriverTask, EmbassyWirelessMatterStack};
 pub type EmbassyWifiMatterStack<'a, E = ()> =
     EmbassyWirelessMatterStack<'a, Wifi, EmbassyNetContext, E>;
 
+/// A trait representing a task that needs access to the Wifi driver and controller to perform its work
 pub trait WifiDriverTask {
+    /// Run the task with the given Wifi driver and controller
     async fn run<D, C>(&mut self, driver: D, controller: C) -> Result<(), Error>
     where
         D: embassy_net::driver::Driver,
@@ -38,6 +38,7 @@ impl<T> WifiDriverTask for &mut T
 where
     T: WifiDriverTask,
 {
+    /// Run the task with the given Wifi driver and Wifi controller
     async fn run<D, C>(&mut self, driver: D, controller: C) -> Result<(), Error>
     where
         D: embassy_net::driver::Driver,
@@ -47,7 +48,10 @@ where
     }
 }
 
+/// A trait representing a task that needs access to the Wifi driver and controller,
+/// as well as to the BLe controller to perform its work
 pub trait WifiCoexDriverTask {
+    /// Run the task with the given Wifi driver, Wifi controller and BLE controller
     async fn run<D, C, B>(
         &mut self,
         wifi_driver: D,
@@ -81,9 +85,9 @@ where
     }
 }
 
-/// A companion trait of `EmbassyWifi` for providing a Wifi driver and controller.
+/// A trait for running a task within a context where the Wifi radio is initialized and operable
 pub trait WifiDriver {
-    /// Provide a Wifi driver and controller by creating these when the Matter stack needs them
+    /// Setup the Wifi driver and controller and run the given task with these
     async fn run<A>(&mut self, task: A) -> Result<(), Error>
     where
         A: WifiDriverTask;
@@ -101,9 +105,9 @@ where
     }
 }
 
-/// A companion trait of `EmbassyWifi` for providing a Wifi driver and controller.
+/// A trait for running a task within a context where the Wifi radio - as well as the BLE controller - are initialized and operable
 pub trait WifiCoexDriver {
-    /// Provide a Wifi driver and controller by creating these when the Matter stack needs them
+    /// Setup the Wifi driver and controller, as well as the BLE controller run the given task with these
     async fn run<A>(&mut self, task: A) -> Result<(), Error>
     where
         A: WifiCoexDriverTask;
@@ -377,46 +381,6 @@ where
     }
 }
 
-/// A context (storage) for the network layer of the Matter stack.
-pub struct EmbassyNetContext {
-    buffers: EnetMatterUdpBuffers,
-    resources: IfMutex<CriticalSectionRawMutex, EnetMatterStackResources>,
-}
-
-impl EmbassyNetContext {
-    /// Create a new instance of the `EmbassyNetContext` type.
-    pub const fn new() -> Self {
-        Self {
-            buffers: EnetMatterUdpBuffers::new(),
-            resources: IfMutex::new(EnetMatterStackResources::new()),
-        }
-    }
-
-    /// Return an in-place initializer for the `EmbassyNetContext` type.
-    pub fn init() -> impl Init<Self> {
-        init!(Self {
-            // TODO: Implement init constructor for `UdpBuffers`
-            buffers: EnetMatterUdpBuffers::new(),
-            // Note: below will break if `HostResources` stops being a bunch of `MaybeUninit`s
-            resources <- IfMutex::init(unsafe { MaybeUninit::<EnetMatterStackResources>::uninit().assume_init() }),
-        })
-    }
-}
-
-impl Default for EmbassyNetContext {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Embedding for EmbassyNetContext {
-    const INIT: Self = Self::new();
-
-    fn init() -> impl Init<Self> {
-        EmbassyNetContext::init()
-    }
-}
-
 #[cfg(feature = "rp")]
 pub mod rp {
     use cyw43::{Control, JoinOptions, ScanOptions};
@@ -427,7 +391,7 @@ pub mod rp {
     use crate::matter::error::{Error, ErrorCode};
     use crate::matter::tlv::OctetsOwned;
     use crate::matter::utils::storage::Vec;
-    use crate::stack::wireless::traits::{
+    use crate::stack::wireless::{
         Controller, NetworkCredentials, WifiData, WifiScanResult, WifiSsid, WirelessData,
     };
 
@@ -564,7 +528,7 @@ pub mod rp {
 // Perhaps it is time to dust-off `embedded_svc::wifi` and publish it as a micro-crate?
 // `embedded-wifi`?
 #[cfg(feature = "esp")]
-pub mod esp {
+pub mod esp_wifi {
     use bt_hci::controller::ExternalController;
 
     use esp_hal::peripheral::{Peripheral, PeripheralRef};
@@ -581,7 +545,7 @@ pub mod esp {
     use crate::matter::error::{Error, ErrorCode};
     use crate::matter::tlv::OctetsOwned;
     use crate::matter::utils::storage::Vec;
-    use crate::stack::wireless::traits::{
+    use crate::stack::wireless::{
         Controller, NetworkCredentials, WifiData, WifiScanResult, WifiSsid, WirelessData,
     };
     use crate::wireless::SLOTS;

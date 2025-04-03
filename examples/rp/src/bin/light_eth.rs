@@ -13,11 +13,10 @@ use core::pin::pin;
 use core::ptr::addr_of_mut;
 
 use embassy_executor::Spawner;
-use embassy_futures::select::select3;
+use embassy_futures::select::select;
 use embassy_net_wiznet::chip::W5500;
 use embassy_net_wiznet::{Runner, State};
 use embassy_rp::bind_interrupts;
-use embassy_rp::clocks::RoscRng;
 use embassy_rp::gpio::{Input, Level, Output, Pull};
 use embassy_rp::peripherals::{SPI0, USB};
 use embassy_rp::spi::{Async, Config as SpiConfig, Spi};
@@ -32,12 +31,8 @@ use log::info;
 
 use panic_probe as _;
 
-use rand_core::RngCore;
-
-use rs_matter_embassy::enet::{
-    create_enet_stack, EnetMatterStackResources, EnetMatterUdpBuffers, EnetNetif, Udp,
-};
 use rs_matter_embassy::epoch::epoch;
+use rs_matter_embassy::eth::{EmbassyEthMatterStack, EmbassyEthernet, PreexistingEthDriver};
 use rs_matter_embassy::matter::data_model::cluster_basic_information::BasicInfoConfig;
 use rs_matter_embassy::matter::data_model::cluster_on_off;
 use rs_matter_embassy::matter::data_model::device_types::DEV_TYPE_ON_OFF_LIGHT;
@@ -51,7 +46,6 @@ use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
 use rs_matter_embassy::stack::MdnsType;
-use rs_matter_embassy::EmbassyEthMatterStack;
 
 use rtt_target::rtt_init_log;
 
@@ -127,15 +121,6 @@ async fn main(spawner: Spawner) {
 
     spawner.spawn(ethernet_task(runner)).unwrap();
 
-    let (net_stack, mut net_runner) = create_enet_stack(device, RoscRng.next_u64(), unsafe {
-        mk_static!(EnetMatterStackResources).assume_init_mut()
-    });
-    let mut net_runner = pin!(async {
-        net_runner.run().await;
-        #[allow(unreachable_code)]
-        Ok(())
-    });
-
     // == Step 2: ==
     // Statically allocate the Matter stack.
     // For MCUs, it is best to allocate it statically, so as to avoid program stack blowups (its memory footprint is ~ 35 to 50KB).
@@ -194,13 +179,8 @@ async fn main(spawner: Spawner) {
     // This step can be repeated in that the stack can be stopped and started multiple times, as needed.
     let store = stack.create_shared_store(DummyKvBlobStore);
     let mut matter = pin!(stack.run(
-        // The Matter stack needs access to the netif so as to detect network going up/down
-        EnetNetif::new(net_stack),
-        // The Matter stack needs to open two UDP sockets
-        Udp::new(
-            net_stack,
-            &*mk_static!(EnetMatterUdpBuffers, EnetMatterUdpBuffers::new()),
-        ),
+        // The Matter stack needs the ethernet inteface to run
+        EmbassyEthernet::new(PreexistingEthDriver::new(device), &stack),
         // The Matter stack needs a persister to store its state
         &store,
         // Our `AsyncHandler` + `AsyncMetadata` impl
@@ -231,10 +211,7 @@ async fn main(spawner: Spawner) {
     });
 
     // Schedule the Matter run & the device loop together
-    select3(&mut matter, &mut device, &mut net_runner)
-        .coalesce()
-        .await
-        .unwrap();
+    select(&mut matter, &mut device).coalesce().await.unwrap();
 }
 
 #[allow(clippy::type_complexity)]
