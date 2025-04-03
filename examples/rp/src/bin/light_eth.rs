@@ -180,7 +180,7 @@ async fn main(spawner: Spawner) {
     let store = stack.create_shared_store(DummyKvBlobStore);
     let mut matter = pin!(stack.run(
         // The Matter stack needs the ethernet inteface to run
-        EmbassyEthernet::new(PreexistingEthDriver::new(device), &stack),
+        EmbassyEthernet::new(PreexistingEthDriver::new(device), stack),
         // The Matter stack needs a persister to store its state
         &store,
         // Our `AsyncHandler` + `AsyncMetadata` impl
