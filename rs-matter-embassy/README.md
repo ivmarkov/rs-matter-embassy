@@ -56,8 +56,8 @@ use rs_matter_embassy::stack::test_device::{
     TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
 };
 use rs_matter_embassy::stack::MdnsType;
-use rs_matter_embassy::wireless::wifi::esp::EspWifiDriver;
-use rs_matter_embassy::wireless::wifi::{EmbassyWifi, EmbassyWifiMatterStack};
+use rs_matter_embassy::wireless::esp::EspWifiDriver;
+use rs_matter_embassy::wireless::{EmbassyWifi, EmbassyWifiMatterStack};
 
 extern crate alloc;
 
