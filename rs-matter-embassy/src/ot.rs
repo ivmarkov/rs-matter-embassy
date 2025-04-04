@@ -11,7 +11,7 @@ use embassy_time::{Duration, Timer};
 
 use log::info;
 
-use ::openthread::{RamSettingNotif, RamSettings, SettingsKey, SharedRamSettings};
+use ::openthread::{RamSettings, RamSettingsChange, SettingsKey, SharedRamSettings};
 use openthread::{
     OpenThread, OtError, OtResources, OtSrpResources, OtUdpResources, SrpConf, SrpService,
 };
@@ -274,7 +274,7 @@ const OT_SRP_ECDSA_KEY: u16 = VENDOR_KEYS_START;
 /// A struct for implementing persistance of `openthread` settings - volatitle and
 /// non-volatile (for selected keys)
 pub struct OtPersist<'a, 'd, S> {
-    settings: SharedRamSettings<'d, NoopRawMutex, fn(RamSettingNotif) -> bool>,
+    settings: SharedRamSettings<'d, NoopRawMutex, fn(RamSettingsChange) -> bool>,
     store: &'a SharedKvBlobStore<'a, S>,
 }
 
@@ -289,15 +289,19 @@ where
     /// - `store`: A reference to the `KvBlobStore` instance used for persisting a subset of the settings to non-volatile storage
     pub const fn new(settings_buf: &'d mut [u8], store: &'a SharedKvBlobStore<'a, S>) -> Self {
         Self {
-            settings: SharedRamSettings::new(RamSettings::new(settings_buf, |notif| match notif {
-                RamSettingNotif::Added { key, .. } | RamSettingNotif::Removed { key, .. }
-                    if key == SettingsKey::SrpEcdsaKey as u16 =>
-                {
-                    true
-                }
-                RamSettingNotif::Clear => true,
-                _ => false,
-            })),
+            settings: SharedRamSettings::new(RamSettings::new_with_signal_change(
+                settings_buf,
+                |change| match change {
+                    RamSettingsChange::Added { key, .. }
+                    | RamSettingsChange::Removed { key, .. }
+                        if key == SettingsKey::SrpEcdsaKey as u16 =>
+                    {
+                        true
+                    }
+                    RamSettingsChange::Clear => true,
+                    _ => false,
+                },
+            )),
             store,
         }
     }
@@ -305,7 +309,7 @@ where
     /// Return a reference to the `SharedRamSettings` instance to be used with `openthread`
     pub const fn settings(
         &self,
-    ) -> &SharedRamSettings<'d, NoopRawMutex, fn(RamSettingNotif) -> bool> {
+    ) -> &SharedRamSettings<'d, NoopRawMutex, fn(RamSettingsChange) -> bool> {
         &self.settings
     }
 
@@ -324,7 +328,7 @@ where
 
                         let value = &data[offset..];
 
-                        settings.add(key, value).unwrap(); // TODO
+                        settings.add(key, value).unwrap();
 
                         offset += value.len();
                     }
@@ -344,19 +348,17 @@ where
             self.settings.with(|settings| {
                 let mut offset = 0;
 
-                for setting in settings
+                for (key, value) in settings
                     .iter()
-                    .filter(|setting| setting.key() == SettingsKey::SrpEcdsaKey as u16)
+                    .filter(|(key, _)| *key == SettingsKey::SrpEcdsaKey as u16)
                 {
-                    if setting.value().len() + 2 > buf.len() - offset {
-                        todo!(); // TODO
-                    }
+                    assert!(value.len() + 2 <= buf.len() - offset);
 
-                    buf[offset..offset + 2].copy_from_slice(&setting.key().to_le_bytes());
+                    buf[offset..offset + 2].copy_from_slice(&key.to_le_bytes());
                     offset += 2;
 
-                    buf[offset..offset + setting.value().len()].copy_from_slice(setting.value());
-                    offset += setting.value().len();
+                    buf[offset..offset + value.len()].copy_from_slice(value);
+                    offset += value.len();
                 }
 
                 Ok(offset)

@@ -179,7 +179,7 @@ async fn main(_s: Spawner) {
     let mut ot_rng = MatterRngCore::new(stack.matter().rand());
     let ot_resources = mk_static!(OtMatterResources).init_with(OtMatterResources::init());
 
-    let mut ot_settings = RamSettings::new(&mut ot_resources.settings_buf, |_| false);
+    let mut ot_settings = RamSettings::new(&mut ot_resources.settings_buf);
 
     let ot = OpenThread::new_with_udp_srp(
         ieee_eui64,
