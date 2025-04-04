@@ -300,7 +300,7 @@ const TEST_BASIC_INFO: BasicInfoConfig = BasicInfoConfig {
     device_name: "MyLight",
     product_name: "ACME Light",
     vendor_name: "ACME",
-    sai: None,
+    sai: Some(1000),
     sii: None,
 };
 
