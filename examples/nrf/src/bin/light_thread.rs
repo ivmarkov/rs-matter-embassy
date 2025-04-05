@@ -43,8 +43,8 @@ use rs_matter_embassy::stack::test_device::{
 };
 use rs_matter_embassy::stack::MdnsType;
 use rs_matter_embassy::wireless::nrf::{
-    NrfBleClockInterruptHandler, NrfBleHighPrioInterruptHandler, NrfBleLowPrioInterruptHandler,
-    NrfThreadDriver, NrfThreadRadioInterruptHandler, NrfThreadRadioResources, NrfThreadRadioRunner,
+    NrfThreadClockInterruptHandler, NrfThreadDriver, NrfThreadHighPrioInterruptHandler,
+    NrfThreadLowPrioInterruptHandler, NrfThreadRadioResources, NrfThreadRadioRunner,
 };
 use rs_matter_embassy::wireless::{EmbassyThread, EmbassyThreadMatterStack};
 
@@ -71,11 +71,11 @@ macro_rules! mk_static {
 
 bind_interrupts!(struct Irqs {
     RNG => rng::InterruptHandler<RNG>;
-    EGU0_SWI0 => NrfBleLowPrioInterruptHandler;
-    CLOCK_POWER => NrfBleClockInterruptHandler;
-    RADIO => NrfBleHighPrioInterruptHandler, NrfThreadRadioInterruptHandler;
-    TIMER0 => NrfBleHighPrioInterruptHandler;
-    RTC0 => NrfBleHighPrioInterruptHandler;
+    EGU0_SWI0 => NrfThreadLowPrioInterruptHandler;
+    CLOCK_POWER => NrfThreadClockInterruptHandler;
+    RADIO => NrfThreadHighPrioInterruptHandler;
+    TIMER0 => NrfThreadHighPrioInterruptHandler;
+    RTC0 => NrfThreadHighPrioInterruptHandler;
 });
 
 #[interrupt]

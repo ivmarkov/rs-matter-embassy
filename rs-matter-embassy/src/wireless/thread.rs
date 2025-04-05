@@ -724,7 +724,7 @@ pub mod nrf {
 
     use log::info;
 
-    pub use nrf_sdc::mpsl::{
+    use nrf_sdc::mpsl::{
         ClockInterruptHandler as NrfBleClockInterruptHandler,
         HighPrioInterruptHandler as NrfBleHighPrioInterruptHandler,
         LowPrioInterruptHandler as NrfBleLowPrioInterruptHandler,
@@ -744,13 +744,49 @@ pub mod nrf {
 
     use crate::ble::MAX_MTU_SIZE;
 
-    pub struct NrfThreadRadioInterruptHandler;
-
-    impl Handler<interrupt::typelevel::RADIO> for NrfThreadRadioInterruptHandler {
+    /// Bind `RADIO`, `TIMER0` and `RTC0` to this interrupt handler
+    pub struct NrfThreadHighPrioInterruptHandler;
+    impl Handler<interrupt::typelevel::RADIO> for NrfThreadHighPrioInterruptHandler {
         unsafe fn on_interrupt() {
             if NRF_THREAD_RADIO_STATE.irq_enabled() {
                 // Call the IEEE 802.15.4 driver interrupt handler, if the driver is enabled
                 InterruptHandler::<embassy_nrf::peripherals::RADIO>::on_interrupt();
+            } else {
+                <NrfBleHighPrioInterruptHandler as Handler::<interrupt::typelevel::RADIO>>::on_interrupt();
+            }
+        }
+    }
+    impl Handler<interrupt::typelevel::TIMER0> for NrfThreadHighPrioInterruptHandler {
+        unsafe fn on_interrupt() {
+            if !NRF_THREAD_RADIO_STATE.irq_enabled() {
+                <NrfBleHighPrioInterruptHandler as Handler::<interrupt::typelevel::TIMER0>>::on_interrupt();
+            }
+        }
+    }
+    impl Handler<interrupt::typelevel::RTC0> for NrfThreadHighPrioInterruptHandler {
+        unsafe fn on_interrupt() {
+            if !NRF_THREAD_RADIO_STATE.irq_enabled() {
+                <NrfBleHighPrioInterruptHandler as Handler::<interrupt::typelevel::RTC0>>::on_interrupt();
+            }
+        }
+    }
+
+    /// Bind `EGU0_SWI0` to this interrupt handler
+    pub struct NrfThreadLowPrioInterruptHandler;
+    impl<T: Interrupt> Handler<T> for NrfThreadLowPrioInterruptHandler {
+        unsafe fn on_interrupt() {
+            if !NRF_THREAD_RADIO_STATE.irq_enabled() {
+                <NrfBleLowPrioInterruptHandler as Handler<T>>::on_interrupt();
+            }
+        }
+    }
+
+    /// Bind `CLOCK_POWER` to this interrupt handler
+    pub struct NrfThreadClockInterruptHandler;
+    impl Handler<interrupt::typelevel::CLOCK_POWER> for NrfThreadClockInterruptHandler {
+        unsafe fn on_interrupt() {
+            if !NRF_THREAD_RADIO_STATE.irq_enabled() {
+                <NrfBleClockInterruptHandler as Handler::<interrupt::typelevel::CLOCK_POWER>>::on_interrupt();
             }
         }
     }
@@ -827,6 +863,7 @@ pub mod nrf {
     }
 
     impl<'a, 'd> NrfThreadRadioRunner<'a, 'd> {
+        /// Create a new instance of the `NrfThreadRadioRunner` type.
         fn new(
             runner: PhyRadioRunner<'a>,
             radio_peripheral: impl Peripheral<P = RADIO> + 'd,
@@ -894,8 +931,27 @@ pub mod nrf {
         ///
         /// # Arguments
         /// - `resources` - The resources for the radio proxying
-        /// - `radio_peripheral` - The radio peripheral instance
-        /// - `irq` - The radio interrupt binding
+        /// - `radio` - The radio peripheral instance
+        /// - `rtc0` - The RTC0 peripheral instance
+        /// - `timer0` - The TIMER0 peripheral instance
+        /// - `temp` - The TEMP peripheral instance
+        /// - `ppi_ch17` - The PPI channel 17 peripheral instance
+        /// - `ppi_ch18` - The PPI channel 18 peripheral instance
+        /// - `ppi_ch19` - The PPI channel 19 peripheral instance
+        /// - `ppi_ch20` - The PPI channel 20 peripheral instance
+        /// - `ppi_ch21` - The PPI channel 21 peripheral instance
+        /// - `ppi_ch22` - The PPI channel 22 peripheral instance
+        /// - `ppi_ch23` - The PPI channel 23 peripheral instance
+        /// - `ppi_ch24` - The PPI channel 24 peripheral instance
+        /// - `ppi_ch25` - The PPI channel 25 peripheral instance
+        /// - `ppi_ch26` - The PPI channel 26 peripheral instance
+        /// - `ppi_ch27` - The PPI channel 27 peripheral instance
+        /// - `ppi_ch28` - The PPI channel 28 peripheral instance
+        /// - `ppi_ch29` - The PPI channel 29 peripheral instance
+        /// - `ppi_ch30` - The PPI channel 30 peripheral instance
+        /// - `ppi_ch31` - The PPI channel 31 peripheral instance
+        /// - `rand` - The random number generator
+        /// - `_irqs` - The interrupt handlers
         #[allow(clippy::too_many_arguments)]
         pub fn new<T, I>(
             resources: &'d mut ProxyRadioResources,
@@ -923,14 +979,14 @@ pub mod nrf {
         ) -> (Self, NrfThreadRadioRunner<'d, 'd>)
         where
             T: Interrupt,
-            I: Binding<T, NrfBleLowPrioInterruptHandler>
-                + Binding<interrupt::typelevel::RADIO, NrfBleHighPrioInterruptHandler>
-                + Binding<interrupt::typelevel::TIMER0, NrfBleHighPrioInterruptHandler>
-                + Binding<interrupt::typelevel::RTC0, NrfBleHighPrioInterruptHandler>
-                + Binding<interrupt::typelevel::CLOCK_POWER, NrfBleClockInterruptHandler>
+            I: Binding<T, NrfThreadLowPrioInterruptHandler>
+                + Binding<interrupt::typelevel::RADIO, NrfThreadHighPrioInterruptHandler>
+                + Binding<interrupt::typelevel::TIMER0, NrfThreadHighPrioInterruptHandler>
+                + Binding<interrupt::typelevel::RTC0, NrfThreadHighPrioInterruptHandler>
+                + Binding<interrupt::typelevel::CLOCK_POWER, NrfThreadClockInterruptHandler>
                 + Binding<
                     <embassy_nrf::peripherals::RADIO as Ieee802154Peripheral>::Interrupt,
-                    NrfThreadRadioInterruptHandler,
+                    NrfThreadHighPrioInterruptHandler,
                 >,
         {
             let caps = openthread::Capabilities::empty();
@@ -1078,7 +1134,6 @@ pub mod nrf {
         T: interrupt::typelevel::Interrupt
     {
     }
-
     unsafe impl Binding<interrupt::typelevel::RADIO, NrfBleHighPrioInterruptHandler>
         for NrfBleControllerInterrupts
     {
