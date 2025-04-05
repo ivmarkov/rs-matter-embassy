@@ -264,21 +264,23 @@ where
                 let persister = OtPersist::new(&mut resources.settings_buf, self.store);
                 persister.load().await?;
 
+                let mut settings = persister.settings();
+
                 let ot = OpenThread::new_with_udp_srp(
                     self.ieee_eui64,
                     &mut rng,
-                    &mut persister.settings(),
+                    &mut settings,
                     &mut resources.ot,
                     &mut resources.udp,
                     &mut resources.srp,
                 )
                 .map_err(to_matter_err)?;
 
-                let controller = OtController(ot);
-                let netif = OtNetif::new(ot);
-                let mdns = OtMdns::new(ot, self.mdns_services).map_err(to_matter_err)?;
+                let controller = OtController(ot.clone());
+                let netif = OtNetif::new(ot.clone());
+                let mdns = OtMdns::new(ot.clone(), self.mdns_services).map_err(to_matter_err)?;
 
-                let mut main = pin!(self.task.run(netif, ot, controller));
+                let mut main = pin!(self.task.run(netif, ot.clone(), controller));
                 let mut radio = pin!(async {
                     ot.run(radio).await;
                     #[allow(unreachable_code)]
@@ -356,24 +358,26 @@ where
                 let persister = OtPersist::new(&mut resources.settings_buf, self.store);
                 persister.load().await?;
 
+                let mut settings = persister.settings();
+
                 let ot = OpenThread::new_with_udp_srp(
                     self.ieee_eui64,
                     &mut rng,
-                    &mut persister.settings(),
+                    &mut settings,
                     &mut resources.ot,
                     &mut resources.udp,
                     &mut resources.srp,
                 )
                 .map_err(to_matter_err)?;
 
-                let controller = OtController(ot);
-                let netif = OtNetif::new(ot);
-                let mdns = OtMdns::new(ot, self.mdns_services).map_err(to_matter_err)?;
+                let controller = OtController(ot.clone());
+                let netif = OtNetif::new(ot.clone());
+                let mdns = OtMdns::new(ot.clone(), self.mdns_services).map_err(to_matter_err)?;
 
                 let peripheral =
                     TroubleBtpGattPeripheral::new(ble_controller, self.rand, self.ble_context);
 
-                let mut main = pin!(self.task.run(netif, ot, controller, peripheral));
+                let mut main = pin!(self.task.run(netif, ot.clone(), controller, peripheral));
                 let mut radio = pin!(async {
                     ot.run(radio).await;
                     #[allow(unreachable_code)]

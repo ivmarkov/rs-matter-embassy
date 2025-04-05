@@ -191,7 +191,7 @@ async fn main(_s: Spawner) {
     )
     .unwrap();
 
-    let ot_mdns = OtMdns::new(ot, mdns_services).unwrap();
+    let ot_mdns = OtMdns::new(ot.clone(), mdns_services).unwrap();
 
     let mut ot_runner = pin!(async {
         ot.run(radio_proxy).await;
@@ -244,9 +244,9 @@ async fn main(_s: Spawner) {
     let store = stack.create_shared_store(DummyKvBlobStore);
     let mut matter = pin!(stack.run_preex(
         // The Matter stack needs access to the netif so as to detect network going up/down
-        OtNetif::new(ot),
+        OtNetif::new(ot.clone()),
         // The Matter stack needs to open two UDP sockets
-        ot,
+        ot.clone(),
         // The Matter stack needs a persister to store its state
         &store,
         // Our `AsyncHandler` + `AsyncMetadata` impl
