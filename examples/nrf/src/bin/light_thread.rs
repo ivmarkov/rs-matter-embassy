@@ -1,7 +1,8 @@
 //! An example utilizing the `EmbassyThreadMatterStack` struct.
 //!
 //! As the name suggests, this Matter stack assembly uses Thread as the main transport,
-//! and thus BLE for commissioning).
+//! and thus BLE for commissioning, in non-concurrent commissioning mode
+//! (the IEEE802154 radio and BLE cannot not run at the same time yet with `embassy-nrf` and `nrf-sdc`).
 //!
 //! The example implements a fictitious Light device (an On-Off Matter cluster).
 #![no_std]
