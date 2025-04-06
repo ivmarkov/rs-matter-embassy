@@ -2,10 +2,10 @@
 
 <img src="https://github.com/ivmarkov/rs-matter-embassy/blob/master/examples/acme.jpg" alt="ACME" width="300" height="670">
 
-The examples are tested and _should_ work on the rPI Pico W, esp32, esp32s3, esp32c3 and esp32c6.
+The examples are tested and _should_ work on the nrf52, rPI Pico W, esp32, esp32s3, esp32c3 and esp32c6.
 
-With that said, it is still early days for both `rs-matter` and `trouble` 
-(the bare-metal BLE stack in use) so you might face issues during the initial commissioning.
+With that said, it is still early days for all of `rs-matter`, `trouble` (the bare-metal BLE stack in use) 
+and `openthread` (the OpenThread Rust wrappers) so you might face issues during the initial commissioning.
 
 Please [report](https://github.com/ivmarkov/rs-matter-embassy/issues) those!
 
@@ -21,6 +21,8 @@ You need one of:
 * **Alexa**:
   * Alexa Echo Hub, Echo Dot or other Amazon Matter Controller
   * The Alexa app on your phone
+  * Note that Alexa will not work with the Thread examples yet, as no MCU is supported
+  * with BLE+Thread coex, and Alexa requires that
 * **Apple**:
   * Apple TV or other Apple Matter Controller
   * An iPhone with the Apple Home app
@@ -121,3 +123,18 @@ cargo +nightly build --target riscv32imac-unknown-none-elf --no-default-features
 espflash flash target/riscv32imac-unknown-none-elf/debug/light_wifi --baud 1500000
 espflash monitor --elf target/riscv32imac-unknown-none-elf/debug/light_wifi
 ```
+
+### Nordic nRF52840 DK
+
+```sh
+# Thread dataset should be valid only if you plan to run the `light_eth` "ethernet" example.
+# Get the Thread dataset from a commissioned device (`ot cli dataset active -x`) 
+# or from your Thread Border Router and set the environment variable
+export THREAD_DATASET="000003..."
+
+cd nrf
+
+cargo build
+
+# Replace `light_thread` with `light_eth` below to flash the Ethernet example
+cargo run --bin light_thread

@@ -9,7 +9,7 @@
 
 Everything necessary to run [`rs-matter`](https://github.com/project-chip/rs-matter) with Embassy:
 * Implementation of `rs-matter`'s `GattPeripheral` for BLE comissioning support based on [`trouble`](https://github.com/embassy-rs/trouble).
-* [`rs-matter-stack`](https://github.com/ivmarkov/rs-matter-stack) support with `Netif`, `Ble`, `Wireless` (with Wifi and **soon Thread!**) and `KvBlobStore` implementations.
+* [`rs-matter-stack`](https://github.com/ivmarkov/rs-matter-stack) support with `Netif`, `Gatt`, `Wireless` (for both Wifi and Thread) and `KvBlobStore` implementations.
 
 ## Example
 
@@ -250,7 +250,6 @@ fn init_heap() {
 
 ## Future
 
-* Thread networking
 * Device Attestation data support using secure flash storage
 * Setting system time via Matter
 * Matter OTA support
