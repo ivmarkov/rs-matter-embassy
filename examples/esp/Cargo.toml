@@ -23,8 +23,6 @@ harness = false
 
 #[patch.'https://github.com/ivmarkov/rs-matter-stack']
 #rs-matter-stack = { path = "../../../rs-matter-stack" }
-#[patch.'https://github.com/embassy-rs/trouble']
-#trouble-host = { version = "0.1", path = "../../../trouble/host" }
 #[patch.'https://github.com/esp-rs/esp-openthread']
 #openthread = { version = "0.1", path = "../../../esp-openthread/openthread" }
 
@@ -32,6 +30,7 @@ harness = false
 #rs-matter = { git = "https://github.com/project-chip/rs-matter" }
 rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "next" }
 #rs-matter = { path = "../../../rs-matter/rs-matter" }
+#trouble-host = { version = "0.1", git = "https://github.com/embassy-rs/trouble" }
 
 [profile.dev]
 # Rust debug is too slow.

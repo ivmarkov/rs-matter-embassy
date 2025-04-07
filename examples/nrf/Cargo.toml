@@ -22,8 +22,6 @@ lto = "fat"
 
 #[patch.'https://github.com/ivmarkov/rs-matter-stack']
 #rs-matter-stack = { path = "../../../rs-matter-stack" }
-#[patch.'https://github.com/embassy-rs/trouble']
-#trouble-host = { version = "0.1", path = "../../../trouble/host" }
 #[patch.'https://github.com/esp-rs/esp-openthread']
 #openthread = { version = "0.1", path = "../../../esp-openthread/openthread" }
 
@@ -33,6 +31,7 @@ rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "next" }
 #rs-matter = { path = "../../../rs-matter/rs-matter" }
 nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "551a95436e999b4290b4a33383aa3d6747b63dd9" }
 nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "551a95436e999b4290b4a33383aa3d6747b63dd9" }
+#trouble-host = { version = "0.1", git = "https://github.com/embassy-rs/trouble" }
 
 [dependencies]
 embassy-executor = { version = "0.7", default-features = false, features = ["task-arena-size-65536", "arch-cortex-m", "executor-thread", "executor-interrupt", "log"] }
