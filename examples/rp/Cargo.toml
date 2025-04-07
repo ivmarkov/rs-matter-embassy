@@ -24,8 +24,6 @@ debug = 2
 #[patch.'https://github.com/embassy-rs/trouble']
 #trouble-host = { version = "0.1", path = "../../../trouble/host" }
 #[patch.'https://github.com/esp-rs/esp-openthread']
-#openthread = { version = "0.1", git = "https://github.com/ivmarkov/esp-openthread", branch = "settings" }
-#[patch.'https://github.com/esp-rs/esp-openthread']
 #openthread = { version = "0.1", path = "../../../esp-openthread/openthread" }
 
 [patch.crates-io]
