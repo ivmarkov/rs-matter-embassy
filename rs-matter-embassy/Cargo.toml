@@ -62,7 +62,7 @@ edge-nal-embassy = { version = "0.5", optional = true }
 trouble-host = "0.1"
 bt-hci = "0.2"
 
-openthread = { version = "0.1", git = "https://github.com/esp-rs/esp-openthread", optional = true, features = ["udp", "srp", "edge-nal"] }
+openthread = { version = "0.1", git = "https://github.com/esp-rs/esp-openthread", optional = true, features = ["udp", "srp", "edge-nal", "log"] }
 hex-slice = "0.1"
 
 # Only necessary when `rs-matter-embassy` is providing extra-sugar for the `esp32*` chips family
