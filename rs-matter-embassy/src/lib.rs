@@ -7,6 +7,9 @@
 //#![warn(clippy::large_stack_frames)]
 #![warn(clippy::large_types_passed_by_value)]
 
+// This mod MUST go first, so that the others see its macros.
+pub(crate) mod fmt;
+
 pub mod ble;
 #[cfg(feature = "embassy-net")]
 pub mod enet;

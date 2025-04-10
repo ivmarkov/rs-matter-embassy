@@ -3,10 +3,13 @@ target = "thumbv7em-none-eabi"
 
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
 # replace nRF82840_xxAA with your chip as listed in `probe-rs chip list`
-runner = "probe-rs run --chip nRF52840_xxAA"
+runner = "probe-rs run --chip nRF52840_xxAA --always-print-stacktrace --catch-reset --catch-hardfault --log-format \"{t} {[{L}]%bold} {s}  {{c} {ff}:{l:1}%dimmed}\""
 
 [unstable]
-#build-std-features = ["panic_immediate_abort"]
+build-std-features = ["panic_immediate_abort"]
 
 # For host builds and STD targets
-build-std = ["core", "alloc", "panic_abort"]
+build-std = ["core", "alloc"]
+
+[env]
+DEFMT_LOG="info"

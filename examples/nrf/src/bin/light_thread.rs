@@ -24,7 +24,7 @@ use embassy_time::{Duration, Timer};
 
 use embedded_alloc::LlffHeap;
 
-use log::info;
+use defmt::{info, unwrap};
 
 use rs_matter_embassy::epoch::epoch;
 use rs_matter_embassy::matter::data_model::cluster_basic_information::BasicInfoConfig;
@@ -52,8 +52,6 @@ use rs_matter_embassy::wireless::{EmbassyThread, EmbassyThreadMatterStack};
 use panic_rtt_target as _;
 
 use tinyrlibc as _;
-
-use rtt_target::rtt_init_log;
 
 macro_rules! mk_static {
     ($t:ty) => {{
@@ -90,7 +88,7 @@ static RADIO_EXECUTOR: InterruptExecutor = InterruptExecutor::new();
 static HEAP: LlffHeap = LlffHeap::empty();
 
 /// We need a bigger log ring-buffer or else the device QR code printout is half-lost
-const LOG_RINGBUF_SIZE: usize = 4096;
+const LOG_RINGBUF_SIZE: usize = 2048;
 
 #[embassy_executor::main]
 async fn main(_s: Spawner) {
@@ -105,11 +103,7 @@ async fn main(_s: Spawner) {
     // == Step 1: ==
     // Necessary `nrf-hal` initialization boilerplate
 
-    rtt_init_log!(
-        log::LevelFilter::Info,
-        rtt_target::ChannelMode::NoBlockSkip,
-        LOG_RINGBUF_SIZE
-    );
+    rtt_target::rtt_init_defmt!(rtt_target::ChannelMode::NoBlockSkip, LOG_RINGBUF_SIZE);
 
     info!("Starting...");
 
@@ -186,10 +180,9 @@ async fn main(_s: Spawner) {
     // The NRF radio needs to run in a high priority executor
     // because it is lacking hardware MAC-filtering and ACK caps,
     // hence these are emulated in software, so low latency is crucial
-    RADIO_EXECUTOR
+    unwrap!(RADIO_EXECUTOR
         .start(interrupt::EGU1_SWI1)
-        .spawn(run_radio(thread_radio_runner))
-        .unwrap();
+        .spawn(run_radio(thread_radio_runner)));
 
     // == Step 4: ==
     // Our "light" on-off cluster.
@@ -256,7 +249,7 @@ async fn main(_s: Spawner) {
     });
 
     // Schedule the Matter run & the device loop together
-    select(&mut matter, &mut device).coalesce().await.unwrap();
+    unwrap!(select(&mut matter, &mut device).coalesce().await);
 }
 
 /// Basic info about our device
