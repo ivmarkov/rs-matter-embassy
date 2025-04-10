@@ -44,7 +44,10 @@ jobs:
         run: cd rs-matter-embassy; cargo fmt -- --check
 
       - name: Build | Clippy
-        run: cd rs-matter-embassy; cargo clippy --no-deps -- -Dwarnings
+        run: cd rs-matter-embassy; cargo clippy --features log --no-deps -- -Dwarnings
+
+      - name: Build | Clippy - defmt
+        run: export DEFMT_LOG=trace; cd rs-matter-embassy; cargo clippy --features defmt --no-deps -- -Dwarnings
 
       - name: Build | Compile
         run: cd rs-matter-embassy; cargo build

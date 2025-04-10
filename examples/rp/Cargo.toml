@@ -18,47 +18,54 @@ opt-level = "z"
 [profile.release]
 opt-level = "z"
 debug = 2
+debug-assertions = false
+lto = "fat"
+codegen-units = 1
+incremental = false
+overflow-checks = false
 
 #[patch.'https://github.com/ivmarkov/rs-matter-stack']
 #rs-matter-stack = { path = "../../../rs-matter-stack" }
-#[patch.'https://github.com/esp-rs/esp-openthread']
+#[patch.'https://github.com/esp-rs/openthread']
 #openthread = { version = "0.1", path = "../../../esp-openthread/openthread" }
 
 [patch.crates-io]
 #rs-matter = { git = "https://github.com/project-chip/rs-matter" }
-rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "next" }
+rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "defmt" }
 #rs-matter = { path = "../../../rs-matter/rs-matter" }
+edge-nal = { git = "https://github.com/ivmarkov/edge-net" }
+edge-nal-embassy = { git = "https://github.com/ivmarkov/edge-net" }
+edge-mdns = { git = "https://github.com/ivmarkov/edge-net" }
 #trouble-host = { version = "0.1", git = "https://github.com/embassy-rs/trouble" }
 
 [features]
 skip-cyw43-firmware = []
 
 [dependencies]
-embassy-executor = { version = "0.7", default-features = false, features = ["task-arena-size-98304", "arch-cortex-m", "executor-thread", "log"] }
-embassy-time = { version = "0.4", default-features = false, features = ["log"] }
-embassy-rp = { version = "0.3", features = ["log", "unstable-pac", "time-driver", "critical-section-impl", "rp2040"] }
+embassy-executor = { version = "0.7", default-features = false, features = ["task-arena-size-65536", "arch-cortex-m", "executor-thread", "defmt"] }
+embassy-time = { version = "0.4", default-features = false, features = ["defmt", "defmt-timestamp-uptime-ms"] }
+embassy-rp = { version = "0.3", features = ["defmt", "unstable-pac", "time-driver", "critical-section-impl", "rp2040"] }
 embassy-futures = "0.1.1"
-embassy-sync = { version = "0.6", features = ["log"] }
-embassy-usb-logger = "0.4"
-log = "0.4"
+embassy-sync = { version = "0.6", features = ["defmt"] }
+defmt = "0.3"
 embedded-alloc = "0.6"
-rs-matter-embassy = { path = "../../rs-matter-embassy", features = ["embassy-net", "rp"] }
+rs-matter-embassy = { path = "../../rs-matter-embassy", features = ["embassy-net", "rp", "defmt"] }
 
 # Wireless examples
-bt-hci = { version = "0.2", default-features = false, features = ["log"] }
-cyw43 = { version = "0.3", features = ["firmware-logs", "log", "bluetooth"] }
+bt-hci = { version = "0.2", default-features = false, features = ["defmt"] }
+cyw43 = { version = "0.3", features = ["firmware-logs", "defmt", "bluetooth"] }
 cyw43-pio = "0.3"
 
 # W5500 Ethernet examples
-embassy-net-wiznet = "0.2"
+embassy-net-wiznet = { version = "0.2", features = ["defmt"] }
 embedded-hal-bus = { version = "0.1", features = ["async"] }
 rand_core = "0.6.4"
 
-cortex-m = { version = "0.7.6" }
-cortex-m-rt = "0.7.0"
+cortex-m = "0.7.6"
+cortex-m-rt = "0.7"
 
-rtt-target = { version = "0.6", features = ["log"] }
-panic-probe = { version = "0.3", features = ["print-rtt"] }
+rtt-target = { version = "0.6", features = ["defmt"] }
+panic-rtt-target = "0.2"
 
 static_cell = "2"
 portable-atomic = { version = "1.5", features = ["critical-section"] }

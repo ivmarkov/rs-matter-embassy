@@ -9,8 +9,6 @@ use embassy_futures::select::select;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::{Duration, Timer};
 
-use log::info;
-
 use ::openthread::{RamSettings, RamSettingsChange, SettingsKey, SharedRamSettings};
 use openthread::{
     OpenThread, OtError, OtResources, OtSrpResources, OtUdpResources, SrpConf, SrpService,
@@ -97,7 +95,7 @@ impl<'d> OtNetif<'d> {
 
             let _ = self.0.ipv6_addrs(|addr| {
                 if let Some((addr, prefix)) = addr {
-                    info!("Got addr {addr}/{prefix}");
+                    info!("Got addr {}/{}", addr, prefix);
 
                     if ipv6.is_unspecified()
                         || ipv6.is_unicast_link_local()
@@ -113,28 +111,24 @@ impl<'d> OtNetif<'d> {
                 Ok(())
             });
 
-            self.0
-                .srp_conf(|conf, state, empty| {
-                    info!("SRP conf: {conf:?}, state: {state}, empty: {empty}");
+            unwrap!(self.0.srp_conf(|conf, state, empty| {
+                info!("SRP conf: {:?}, state: {}, empty: {}", conf, state, empty);
 
-                    Ok(())
-                })
-                .unwrap();
+                Ok(())
+            }));
 
-            self.0
-                .srp_services(|service| {
-                    if let Some((service, state, slot)) = service {
-                        info!("SRP service: {service}, state: {state}, slot: {slot}");
-                    }
-                })
-                .unwrap();
+            unwrap!(self.0.srp_services(|service| {
+                if let Some((service, state, slot)) = service {
+                    info!("SRP service: {}, state: {}, slot: {}", service, state, slot);
+                }
+            }));
 
             let conf = NetifConf {
                 ipv4: Ipv4Addr::UNSPECIFIED,
                 ipv6,
                 interface: 0,
                 // TODO: Fix this in `rs-matter-stack`
-                mac: self.0.ieee_eui64()[..6].try_into().unwrap(),
+                mac: unwrap!(self.0.ieee_eui64()[..6].try_into()),
             };
 
             Some(conf)
@@ -185,19 +179,21 @@ impl<'d> OtMdns<'d> {
             let ieee_eui64 = self.ot.ieee_eui64();
 
             let mut hostname = heapless::String::<16>::new();
-            write!(
-                hostname,
-                "{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
-                ieee_eui64[0],
-                ieee_eui64[1],
-                ieee_eui64[2],
-                ieee_eui64[3],
-                ieee_eui64[4],
-                ieee_eui64[5],
-                ieee_eui64[6],
-                ieee_eui64[7]
-            )
-            .unwrap();
+            unwrap!(
+                write!(
+                    hostname,
+                    "{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
+                    ieee_eui64[0],
+                    ieee_eui64[1],
+                    ieee_eui64[2],
+                    ieee_eui64[3],
+                    ieee_eui64[4],
+                    ieee_eui64[5],
+                    ieee_eui64[6],
+                    ieee_eui64[7]
+                ),
+                "Unreachable"
+            );
 
             // If the device was restarted, this call will make sure that
             // the SRP records are removed from the SRP server
@@ -224,40 +220,36 @@ impl<'d> OtMdns<'d> {
                 ..Default::default()
             })?;
 
-            info!("Registered SRP host {hostname}");
+            info!("Registered SRP host {}", hostname);
 
-            self.services
-                .visit_services(|matter_mode, matter_service| {
-                    let name = if matches!(matter_mode, ServiceMode::Commissioned) {
-                        "_matter._tcp"
-                    } else {
-                        "_matterc._udp"
-                    };
+            unwrap!(self.services.visit_services(|matter_mode, matter_service| {
+                let name = if matches!(matter_mode, ServiceMode::Commissioned) {
+                    "_matter._tcp"
+                } else {
+                    "_matterc._udp"
+                };
 
-                    self.ot
-                        .srp_add_service(&SrpService {
-                            name,
-                            instance_name: matter_service.name,
-                            port: matter_service.port,
-                            subtype_labels: matter_service.service_subtypes.iter().cloned(),
-                            txt_entries: matter_service
-                                .txt_kvs
-                                .iter()
-                                .cloned()
-                                .filter(|(k, _)| !k.is_empty())
-                                .map(|(k, v)| (k, v.as_bytes())),
-                            priority: 0,
-                            weight: 0,
-                            lease_secs: 0,
-                            key_lease_secs: 0,
-                        })
-                        .unwrap(); // TODO
+                unwrap!(self.ot.srp_add_service(&SrpService {
+                    name,
+                    instance_name: matter_service.name,
+                    port: matter_service.port,
+                    subtype_labels: matter_service.service_subtypes.iter().cloned(),
+                    txt_entries: matter_service
+                        .txt_kvs
+                        .iter()
+                        .cloned()
+                        .filter(|(k, _)| !k.is_empty())
+                        .map(|(k, v)| (k, v.as_bytes())),
+                    priority: 0,
+                    weight: 0,
+                    lease_secs: 0,
+                    key_lease_secs: 0,
+                })); // TODO
 
-                    info!("Added service {} of type {name}", matter_service.name);
+                info!("Added service {} of type {}", matter_service.name, name);
 
-                    Ok(())
-                })
-                .unwrap();
+                Ok(())
+            }));
 
             self.services.broadcast_signal().wait().await;
         }
@@ -328,7 +320,7 @@ where
 
                         let value = &data[offset..];
 
-                        settings.add(key, value).unwrap();
+                        unwrap!(settings.add(key, value));
 
                         offset += value.len();
                     }

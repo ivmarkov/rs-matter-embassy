@@ -28,7 +28,7 @@ harness = false
 
 [patch.crates-io]
 #rs-matter = { git = "https://github.com/project-chip/rs-matter" }
-rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "next" }
+rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "defmt" }
 #rs-matter = { path = "../../../rs-matter/rs-matter" }
 #trouble-host = { version = "0.1", git = "https://github.com/embassy-rs/trouble" }
 
