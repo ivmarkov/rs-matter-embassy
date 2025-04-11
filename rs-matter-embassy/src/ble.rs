@@ -16,8 +16,6 @@ use embassy_sync::blocking_mutex::raw::RawMutex;
 
 use embedded_io::ErrorType;
 
-use log::{debug, info, warn};
-
 use rs_matter_stack::matter::error::{Error, ErrorCode};
 use rs_matter_stack::matter::transport::network::btp::{
     AdvData, GattPeripheral, GattPeripheralEvent, C1_CHARACTERISTIC_UUID, C2_CHARACTERISTIC_UUID,
@@ -32,6 +30,8 @@ use rs_matter_stack::matter::utils::sync::IfMutex;
 use trouble_host::att::{AttCfm, AttClient, AttReq, AttRsp, AttUns};
 use trouble_host::prelude::*;
 use trouble_host::{self, Address, BleHostError, Controller, HostResources};
+
+use crate::fmt::Bytes;
 
 const MAX_CONNECTIONS: usize = 1;
 // Issue with esp32c6: we can't go lower than 255 on it
@@ -64,6 +64,7 @@ struct MatterService {
 }
 
 #[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 struct IndBuffer {
     addr: BtAddr,
     data: Vec<u8, MAX_MTU_SIZE>,
@@ -125,12 +126,11 @@ where
     }
 
     // pub(crate) fn reset(&self) -> Result<(), ()> {
-    //     self.ind
+    //     unwrap!(self.ind
     //         .try_lock()
     //         .map(|mut ind| {
     //             ind.data.clear();
-    //         })
-    //         .unwrap(); // TODO
+    //         })); // TODO
 
     //     Ok(())
     // }
@@ -211,11 +211,12 @@ where
             ..
         } = stack.build();
 
-        let server = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
-            name: "TrouBLE",                                             // TODO
-            appearance: &appearance::power_device::GENERIC_POWER_DEVICE, // TODO
-        }))
-        .unwrap();
+        let server = unwrap!(Server::new_with_config(GapConfig::Peripheral(
+            PeripheralConfig {
+                name: "TrouBLE",                                             // TODO
+                appearance: &appearance::power_device::GENERIC_POWER_DEVICE, // TODO
+            }
+        )));
 
         let _ = join(Self::run_ble(runner), async {
             loop {
@@ -229,9 +230,7 @@ where
                         select(events, indications).await;
                     }
                     Err(e) => {
-                        // #[cfg(feature = "defmt")]
-                        // let e = defmt::Debug2Format(&e);
-                        panic!("[adv] error: {:?}", e);
+                        panic!("[adv] error: {:?}", debug2format!(e)); // TODO: defmt
                     }
                 }
             }
@@ -247,9 +246,7 @@ where
     {
         loop {
             if let Err(e) = runner.run().await {
-                // #[cfg(feature = "defmt")]
-                // let e = defmt::Debug2Format(&e);
-                panic!("[ble_task] error: {:?}", e);
+                panic!("[ble_task] error: {:?}", debug2format!(e)); // TODO: defmt
             }
         }
     }
@@ -275,7 +272,7 @@ where
             )
             .await?;
 
-            debug!("GATT: Indicate {:02x?} len {}", ind.data, ind.data.len());
+            debug!("GATT: Indicate {} len {}", Bytes(&ind.data), ind.data.len());
         }
     }
 
@@ -317,8 +314,8 @@ where
                         }) => {
                             if handle == server.matter_service.c1.handle {
                                 debug!(
-                                    "GATT: C1 Write {:02x?} len {} / MTU {}",
-                                    bytes,
+                                    "GATT: C1 Write {} len {} / MTU {}",
+                                    Bytes(bytes),
                                     bytes.len(),
                                     conn.att_mtu()
                                 );
@@ -329,7 +326,7 @@ where
                                     gatt_mtu: Some(conn.att_mtu()),
                                 });
 
-                                data.reply(AttRsp::Write).await.unwrap();
+                                unwrap!(data.reply(AttRsp::Write).await);
 
                                 continue;
                             } else if Some(handle) == server.matter_service.c2.cccd_handle {
@@ -347,7 +344,7 @@ where
                                     )));
                                 }
 
-                                data.reply(AttRsp::Write).await.unwrap();
+                                unwrap!(data.reply(AttRsp::Write).await);
 
                                 continue;
                             }
@@ -433,7 +430,7 @@ where
             .ind
             .with(|ind| {
                 if ind.data.is_empty() {
-                    ind.data.extend_from_slice(data).unwrap();
+                    unwrap!(ind.data.extend_from_slice(data));
                     ind.addr = address;
 
                     Some(())

@@ -16,20 +16,14 @@ use embassy_executor::Spawner;
 use embassy_futures::select::select;
 use embassy_net_wiznet::chip::W5500;
 use embassy_net_wiznet::{Runner, State};
-use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Input, Level, Output, Pull};
-use embassy_rp::peripherals::{SPI0, USB};
+use embassy_rp::peripherals::SPI0;
 use embassy_rp::spi::{Async, Config as SpiConfig, Spi};
-use embassy_rp::usb::{self, Driver};
 use embassy_time::{Delay, Duration, Timer};
 
 use embedded_alloc::LlffHeap;
 
 use embedded_hal_bus::spi::ExclusiveDevice;
-
-use log::info;
-
-use panic_probe as _;
 
 use rs_matter_embassy::epoch::epoch;
 use rs_matter_embassy::eth::{EmbassyEthMatterStack, EmbassyEthernet, PreexistingEthDriver};
@@ -47,7 +41,9 @@ use rs_matter_embassy::stack::test_device::{
 };
 use rs_matter_embassy::stack::MdnsType;
 
-use rtt_target::rtt_init_log;
+use defmt::{info, unwrap};
+
+use panic_rtt_target as _;
 
 macro_rules! mk_static {
     ($t:ty) => {{
@@ -64,15 +60,11 @@ macro_rules! mk_static {
     }};
 }
 
-bind_interrupts!(struct Irqs {
-    USBCTRL_IRQ => usb::InterruptHandler<USB>;
-});
-
 #[global_allocator]
 static HEAP: LlffHeap = LlffHeap::empty();
 
 /// We need a bigger log ring-buffer or else the device QR code printout is half-lost
-const LOG_RINGBUF_SIZE: usize = 4096;
+const LOG_RINGBUF_SIZE: usize = 2048;
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -89,15 +81,7 @@ async fn main(spawner: Spawner) {
 
     let p = embassy_rp::init(Default::default());
 
-    rtt_init_log!(
-        log::LevelFilter::Info,
-        rtt_target::ChannelMode::NoBlockSkip,
-        LOG_RINGBUF_SIZE
-    );
-
-    // Uncomment to enable USB logging, and comment the `rtt_init_log!` call ^^^
-    // let driver = Driver::new(p.USB, Irqs);
-    // spawner.spawn(logger_task(driver)).unwrap();
+    rtt_target::rtt_init_defmt!(rtt_target::ChannelMode::NoBlockSkip, LOG_RINGBUF_SIZE);
 
     info!("Starting...");
 
@@ -109,17 +93,19 @@ async fn main(spawner: Spawner) {
     let w5500_int = Input::new(p.PIN_21, Pull::Up);
     let w5500_reset = Output::new(p.PIN_20, Level::High);
 
-    let (device, runner) = embassy_net_wiznet::new(
-        [0x02, 0x00, 0x00, 0x00, 0x00, 0x00],
-        mk_static!(State::<8, 8>, State::new()),
-        ExclusiveDevice::new(spi, cs, Delay),
-        w5500_int,
-        w5500_reset,
-    )
-    .await
-    .unwrap();
+    let (device, runner) = unwrap!(
+        embassy_net_wiznet::new(
+            [0x02, 0x00, 0x00, 0x00, 0x00, 0x00],
+            mk_static!(State::<8, 8>, State::new()),
+            ExclusiveDevice::new(spi, cs, Delay),
+            w5500_int,
+            w5500_reset,
+        )
+        .await,
+        "Failed to initialize W5500",
+    );
 
-    spawner.spawn(ethernet_task(runner)).unwrap();
+    unwrap!(spawner.spawn(ethernet_task(runner)));
 
     // == Step 2: ==
     // Statically allocate the Matter stack.
@@ -211,7 +197,7 @@ async fn main(spawner: Spawner) {
     });
 
     // Schedule the Matter run & the device loop together
-    select(&mut matter, &mut device).coalesce().await.unwrap();
+    unwrap!(select(&mut matter, &mut device).coalesce().await);
 }
 
 #[allow(clippy::type_complexity)]
@@ -226,11 +212,6 @@ async fn ethernet_task(
     >,
 ) -> ! {
     runner.run().await
-}
-
-#[embassy_executor::task]
-async fn logger_task(driver: Driver<'static, USB>) {
-    embassy_usb_logger::run!(LOG_RINGBUF_SIZE, log::LevelFilter::Info, driver);
 }
 
 /// Endpoint 0 (the root endpoint) always runs
