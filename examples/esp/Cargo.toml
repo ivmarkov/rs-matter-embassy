@@ -31,6 +31,9 @@ harness = false
 rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "defmt" }
 #rs-matter = { path = "../../../rs-matter/rs-matter" }
 #trouble-host = { version = "0.1", git = "https://github.com/embassy-rs/trouble" }
+edge-nal = { git = "https://github.com/ivmarkov/edge-net" }
+edge-nal-embassy = { git = "https://github.com/ivmarkov/edge-net" }
+edge-mdns = { git = "https://github.com/ivmarkov/edge-net" }
 
 [profile.dev]
 # Rust debug is too slow.
@@ -64,7 +67,7 @@ esp-wifi = { version = "0.12.0", features = ["wifi", "ble"] }
 esp-ieee802154 = { version = "0.5", optional = true }
 bt-hci = { version = "0.2" }
 heapless = "0.8"
-rs-matter-embassy = { path = "../../rs-matter-embassy", features = ["esp", "embassy-net", "openthread"] }
+rs-matter-embassy = { path = "../../rs-matter-embassy", features = ["esp", "embassy-net", "openthread", "log"] }
 tinyrlibc = { version = "0.5", default-features = false, features = ["utoa", "strtoul"] }
 embassy-sync = "0.6"
 embassy-futures = "0.1"
