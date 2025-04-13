@@ -28,7 +28,7 @@ use embassy_time::{Duration, Timer};
 
 use embedded_alloc::LlffHeap;
 
-use log::info;
+use defmt::{info, unwrap};
 
 use rs_matter_embassy::epoch::epoch;
 use rs_matter_embassy::matter::data_model::cluster_basic_information::BasicInfoConfig;
@@ -58,8 +58,6 @@ use rs_matter_embassy::stack::MdnsType;
 use panic_rtt_target as _;
 
 use tinyrlibc as _;
-
-use rtt_target::rtt_init_log;
 
 macro_rules! mk_static {
     ($t:ty) => {{
@@ -94,7 +92,7 @@ static HEAP: LlffHeap = LlffHeap::empty();
 const THREAD_DATASET: &str = env!("THREAD_DATASET");
 
 /// We need a bigger log ring-buffer or else the device QR code printout is half-lost
-const LOG_RINGBUF_SIZE: usize = 4096;
+const LOG_RINGBUF_SIZE: usize = 2048;
 
 #[embassy_executor::main]
 async fn main(_s: Spawner) {
@@ -109,11 +107,7 @@ async fn main(_s: Spawner) {
     // == Step 1: ==
     // Necessary `nrf-hal` initialization boilerplate
 
-    rtt_init_log!(
-        log::LevelFilter::Info,
-        rtt_target::ChannelMode::NoBlockSkip,
-        LOG_RINGBUF_SIZE
-    );
+    rtt_target::rtt_init_defmt!(rtt_target::ChannelMode::NoBlockSkip, LOG_RINGBUF_SIZE);
 
     info!("Starting...");
 
@@ -171,27 +165,25 @@ async fn main(_s: Spawner) {
     // The NRF radio needs to run in a high priority executor
     // because it is lacking hardware MAC-filtering and ACK caps,
     // hence these are emulated in software, so low latency is crucial
-    RADIO_EXECUTOR
+    unwrap!(RADIO_EXECUTOR
         .start(interrupt::EGU1_SWI1)
-        .spawn(run_radio(radio_runner, radio))
-        .unwrap();
+        .spawn(run_radio(radio_runner, radio)));
 
     let mut ot_rng = MatterRngCore::new(stack.matter().rand());
     let ot_resources = mk_static!(OtMatterResources).init_with(OtMatterResources::init());
 
     let mut ot_settings = RamSettings::new(&mut ot_resources.settings_buf);
 
-    let ot = OpenThread::new_with_udp_srp(
+    let ot = unwrap!(OpenThread::new_with_udp_srp(
         ieee_eui64,
         &mut ot_rng,
         &mut ot_settings,
         &mut ot_resources.ot,
         &mut ot_resources.udp,
         &mut ot_resources.srp,
-    )
-    .unwrap();
+    ));
 
-    let ot_mdns = OtMdns::new(ot.clone(), mdns_services).unwrap();
+    let ot_mdns = unwrap!(OtMdns::new(ot.clone(), mdns_services));
 
     let mut ot_runner = pin!(async {
         ot.run(radio_proxy).await;
@@ -199,16 +191,16 @@ async fn main(_s: Spawner) {
         Ok(())
     });
     let mut ot_mdns_runner = pin!(async {
-        ot_mdns.run().await.unwrap();
+        unwrap!(ot_mdns.run().await);
         #[allow(unreachable_code)]
         Ok(())
     });
 
-    ot.srp_autostart().unwrap();
+    unwrap!(ot.srp_autostart());
 
-    ot.set_active_dataset_tlv_hexstr(THREAD_DATASET).unwrap();
-    ot.enable_ipv6(true).unwrap();
-    ot.enable_thread(true).unwrap();
+    unwrap!(ot.set_active_dataset_tlv_hexstr(THREAD_DATASET));
+    unwrap!(ot.enable_ipv6(true));
+    unwrap!(ot.enable_thread(true));
 
     // == Step 4: ==
     // Our "light" on-off cluster.
@@ -277,15 +269,16 @@ async fn main(_s: Spawner) {
     });
 
     // Schedule the Matter run & the device loop together
-    select4(
-        &mut matter,
-        &mut device,
-        &mut ot_runner,
-        &mut ot_mdns_runner,
-    )
-    .coalesce()
-    .await
-    .unwrap();
+    unwrap!(
+        select4(
+            &mut matter,
+            &mut device,
+            &mut ot_runner,
+            &mut ot_mdns_runner,
+        )
+        .coalesce()
+        .await
+    );
 }
 
 /// Basic info about our device

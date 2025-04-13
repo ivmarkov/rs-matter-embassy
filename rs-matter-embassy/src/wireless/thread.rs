@@ -4,8 +4,6 @@ use embassy_futures::select::{select, select4};
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 use embassy_time::{Duration, Instant, Timer};
 
-use log::{error, info};
-
 use openthread::{Channels, OpenThread, OtError, Radio};
 
 use rs_matter::utils::rand::Rand;
@@ -24,6 +22,7 @@ use rs_matter_stack::wireless::{
 };
 
 use crate::ble::{ControllerRef, TroubleBtpGattContext, TroubleBtpGattPeripheral};
+use crate::fmt::Bytes;
 use crate::ot::OtPersist;
 use crate::ot::{OtMatterResources, OtMdns, OtNetif};
 
@@ -553,10 +552,9 @@ impl Controller for OtController<'_> {
 
         // NOTE: Printing the dataset is a security issue, but we do it for now for debugging purposes
         // (i.e. for running some of the pseudo-eth examples the user needs the Thread network dataset)
-        use hex_slice::AsHex;
         info!(
-            "Connecting to Thread network, dataset: {:02x}",
-            creds.op_dataset.plain_hex(false)
+            "Connecting to Thread network, dataset: {:x}",
+            Bytes(&creds.op_dataset)
         );
 
         self.0
@@ -595,10 +593,9 @@ impl Controller for OtController<'_> {
             .flatten()
             .map(|id| {
                 ThreadId(OctetsOwned {
-                    vec: rs_matter_stack::matter::utils::storage::Vec::from_slice(
+                    vec: unwrap!(rs_matter_stack::matter::utils::storage::Vec::from_slice(
                         &u64::to_be_bytes(id),
-                    )
-                    .unwrap(),
+                    )),
                 })
             }))
     }
@@ -721,8 +718,6 @@ pub mod nrf {
     use embassy_nrf::{Peripheral, PeripheralRef};
 
     use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-
-    use log::info;
 
     use nrf_sdc::mpsl::{
         ClockInterruptHandler as NrfBleClockInterruptHandler,

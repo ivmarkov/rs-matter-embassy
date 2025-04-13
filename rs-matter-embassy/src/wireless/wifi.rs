@@ -385,8 +385,7 @@ where
 pub mod rp {
     use cyw43::{Control, JoinOptions, ScanOptions};
 
-    use log::{error, info};
-
+    use crate::fmt::Bytes;
     use crate::matter::data_model::sdm::nw_commissioning::{WiFiSecurity, WifiBand};
     use crate::matter::error::{Error, ErrorCode};
     use crate::matter::tlv::OctetsOwned;
@@ -427,12 +426,10 @@ pub mod rp {
             //scan_options.scan_type = ScanType::Active;
 
             if let Some(network_id) = network_id {
-                scan_options.ssid = Some(
-                    core::str::from_utf8(network_id.0.vec.as_slice())
+                scan_options.ssid =
+                    Some(unwrap!(core::str::from_utf8(network_id.0.vec.as_slice())
                         .unwrap_or("???")
-                        .try_into()
-                        .unwrap(),
-                );
+                        .try_into()));
             }
 
             let mut scanner = self.0.scan(scan_options).await;
@@ -443,10 +440,10 @@ pub mod rp {
                 if ap.ssid_len > 0 {
                     let result = WifiScanResult {
                         ssid: WifiSsid(OctetsOwned {
-                            vec: Vec::from_slice(&ap.ssid[..ap.ssid_len as _]).unwrap(),
+                            vec: unwrap!(Vec::from_slice(&ap.ssid[..ap.ssid_len as _])),
                         }),
                         bssid: OctetsOwned {
-                            vec: Vec::from_slice(&ap.bssid).unwrap(),
+                            vec: unwrap!(Vec::from_slice(&ap.bssid)),
                         },
                         channel: ap.chanspec,
                         rssi: Some(ap.rssi as _),
@@ -459,8 +456,8 @@ pub mod rp {
                     info!("Scan result {:?}", result);
                 } else {
                     info!(
-                        "Skipping scan result for a hidden network {:02x?}",
-                        ap.bssid
+                        "Skipping scan result for a hidden network {}",
+                        Bytes(&ap.bssid)
                     );
                 }
             }
@@ -478,7 +475,7 @@ pub mod rp {
         ) -> Result<(), Error> {
             let ssid = core::str::from_utf8(creds.ssid.0.vec.as_slice()).unwrap_or("???");
 
-            info!("Wifi connect request for SSID {ssid}");
+            info!("Wifi connect request for SSID {}", ssid);
 
             self.1 = None;
 
@@ -516,7 +513,7 @@ pub mod rp {
     }
 
     fn to_err(e: cyw43::ControlError) -> Error {
-        error!("Wifi error: {:?}", e);
+        error!("Wifi error: {:?}", debug2format!(e));
         Error::new(ErrorCode::NoNetworkInterface)
     }
 }
@@ -538,8 +535,6 @@ pub mod esp_wifi {
         AuthMethod, ClientConfiguration, Configuration, ScanConfig, WifiController, WifiError,
         WifiStaDevice,
     };
-
-    use log::{error, info};
 
     use crate::matter::data_model::sdm::nw_commissioning::{WiFiSecurity, WifiBand};
     use crate::matter::error::{Error, ErrorCode};
@@ -583,17 +578,14 @@ pub mod esp_wifi {
         where
             A: super::WifiDriverTask,
         {
-            let (wifi_interface, mut controller) = esp_wifi::wifi::new_with_mode(
+            let (wifi_interface, mut controller) = unwrap!(esp_wifi::wifi::new_with_mode(
                 self.controller,
                 &mut self.wifi_peripheral,
                 WifiStaDevice,
-            )
-            .unwrap();
+            ));
 
             // esp32c6-specific - need to boost the power to get a good signal
-            controller
-                .set_power_saving(esp_wifi::config::PowerSaveMode::None)
-                .unwrap();
+            unwrap!(controller.set_power_saving(esp_wifi::config::PowerSaveMode::None));
 
             task.run(wifi_interface, EspWifiController::new(controller))
                 .await
@@ -605,17 +597,14 @@ pub mod esp_wifi {
         where
             A: super::WifiCoexDriverTask,
         {
-            let (wifi_interface, mut controller) = esp_wifi::wifi::new_with_mode(
+            let (wifi_interface, mut controller) = unwrap!(esp_wifi::wifi::new_with_mode(
                 self.controller,
                 &mut self.wifi_peripheral,
                 WifiStaDevice,
-            )
-            .unwrap();
+            ));
 
             // esp32c6-specific - need to boost the power to get a good signal
-            controller
-                .set_power_saving(esp_wifi::config::PowerSaveMode::None)
-                .unwrap();
+            unwrap!(controller.set_power_saving(esp_wifi::config::PowerSaveMode::None));
 
             let ble_controller = ExternalController::<_, SLOTS>::new(BleConnector::new(
                 self.controller,
@@ -680,12 +669,9 @@ pub mod esp_wifi {
 
             let mut scan_config = ScanConfig::default();
             if let Some(network_id) = network_id {
-                scan_config.ssid = Some(
-                    core::str::from_utf8(network_id.0.vec.as_slice())
-                        .unwrap_or("???")
-                        .try_into()
-                        .unwrap(),
-                );
+                scan_config.ssid = Some(unwrap!(core::str::from_utf8(network_id.0.vec.as_slice())
+                    .unwrap_or("???")
+                    .try_into()));
             }
 
             let (aps, len) = self
@@ -702,10 +688,10 @@ pub mod esp_wifi {
             for ap in aps {
                 let result = WifiScanResult {
                     ssid: WifiSsid(OctetsOwned {
-                        vec: ap.ssid.as_bytes().try_into().unwrap(),
+                        vec: unwrap!(ap.ssid.as_bytes().try_into()),
                     }),
                     bssid: OctetsOwned {
-                        vec: Vec::from_slice(&ap.bssid).unwrap(),
+                        vec: unwrap!(Vec::from_slice(&ap.bssid)),
                     },
                     channel: ap.channel as _,
                     rssi: Some(ap.signal_strength),
@@ -760,7 +746,7 @@ pub mod esp_wifi {
 
             self.0
                 .set_configuration(&Configuration::Client(ClientConfiguration {
-                    ssid: ssid.try_into().unwrap(),
+                    ssid: unwrap!(ssid.try_into()),
                     password: creds.password.clone(),
                     ..Default::default() // TODO: Try something else besides WPA2-Personal
                 }))

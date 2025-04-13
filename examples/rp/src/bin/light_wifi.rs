@@ -23,16 +23,15 @@ use embassy_executor::Spawner;
 use embassy_futures::select::select;
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{Level, Output};
-use embassy_rp::peripherals::{DMA_CH0, PIO0, USB};
+use embassy_rp::peripherals::{DMA_CH0, PIO0};
 use embassy_rp::pio::{InterruptHandler, Pio};
-use embassy_rp::usb::{self, Driver};
 use embassy_time::{Duration, Timer};
 
 use embedded_alloc::LlffHeap;
 
-use panic_probe as _;
+use panic_rtt_target as _;
 
-use log::info;
+use defmt::{info, unwrap};
 
 use rs_matter_embassy::enet::net::driver::{Driver as _, HardwareAddress as DriverHardwareAddress};
 use rs_matter_embassy::enet::{
@@ -56,8 +55,6 @@ use rs_matter_embassy::stack::MdnsType;
 use rs_matter_embassy::wireless::rp::Cyw43WifiController;
 use rs_matter_embassy::wireless::{EmbassyWifi, EmbassyWifiMatterStack, PreexistingWifiDriver};
 
-use rtt_target::rtt_init_log;
-
 macro_rules! mk_static {
     ($t:ty) => {{
         static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
@@ -75,14 +72,13 @@ macro_rules! mk_static {
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
-    USBCTRL_IRQ => usb::InterruptHandler<USB>;
 });
 
 #[global_allocator]
 static HEAP: LlffHeap = LlffHeap::empty();
 
 /// We need a bigger log ring-buffer or else the device QR code printout is half-lost
-const LOG_RINGBUF_SIZE: usize = 4096;
+const LOG_RINGBUF_SIZE: usize = 2048;
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -99,15 +95,7 @@ async fn main(spawner: Spawner) {
 
     let p = embassy_rp::init(Default::default());
 
-    rtt_init_log!(
-        log::LevelFilter::Info,
-        rtt_target::ChannelMode::NoBlockSkip,
-        LOG_RINGBUF_SIZE
-    );
-
-    // Uncomment to enable USB logging, and comment the `rtt_init_log!` call ^^^
-    // let driver = Driver::new(p.USB, Irqs);
-    // spawner.spawn(logger_task(driver)).unwrap();
+    rtt_target::rtt_init_defmt!(rtt_target::ChannelMode::NoBlockSkip, LOG_RINGBUF_SIZE);
 
     info!("Starting...");
 
@@ -142,7 +130,7 @@ async fn main(spawner: Spawner) {
     let state = mk_static!(cyw43::State, cyw43::State::new());
     let (net_device, bt_device, mut control, runner) =
         cyw43::new_with_bluetooth(state, pwr, spi, fw, btfw).await;
-    spawner.spawn(cyw43_task(runner)).unwrap();
+    unwrap!(spawner.spawn(cyw43_task(runner)));
     control.init(clm).await; // We should have the Wifi MAC address now
 
     // cyw43 is a bit special in that it needs to have allowlisted all multicast MAC addresses
@@ -151,20 +139,22 @@ async fn main(spawner: Spawner) {
     let DriverHardwareAddress::Ethernet(mac) = net_device.hardware_address() else {
         unreachable!()
     };
-    control
-        .add_multicast_address(MDNS_MULTICAST_MAC_IPV4)
-        .await
-        .unwrap();
-    control
-        .add_multicast_address(MDNS_MULTICAST_MAC_IPV6)
-        .await
-        .unwrap();
-    control
-        .add_multicast_address(multicast_mac_for_link_local_ipv6(&create_link_local_ipv6(
-            &mac,
-        )))
-        .await
-        .unwrap();
+    unwrap!(
+        control.add_multicast_address(MDNS_MULTICAST_MAC_IPV4).await,
+        "Adding multicast addr failed",
+    );
+    unwrap!(
+        control.add_multicast_address(MDNS_MULTICAST_MAC_IPV6).await,
+        "Adding multicast addr failed",
+    );
+    unwrap!(
+        control
+            .add_multicast_address(multicast_mac_for_link_local_ipv6(&create_link_local_ipv6(
+                &mac,
+            )))
+            .await,
+        "Adding multicast addr failed",
+    );
 
     let controller: ExternalController<_, 20> = ExternalController::new(bt_device);
 
@@ -263,7 +253,7 @@ async fn main(spawner: Spawner) {
     });
 
     // Schedule the Matter run & the device loop together
-    select(&mut matter, &mut device).coalesce().await.unwrap();
+    unwrap!(select(&mut matter, &mut device).coalesce().await);
 }
 
 #[embassy_executor::task]
@@ -271,11 +261,6 @@ async fn cyw43_task(
     runner: cyw43::Runner<'static, Output<'static>, PioSpi<'static, PIO0, 0, DMA_CH0>>,
 ) -> ! {
     runner.run().await
-}
-
-#[embassy_executor::task]
-async fn logger_task(driver: Driver<'static, USB>) {
-    embassy_usb_logger::run!(LOG_RINGBUF_SIZE, log::LevelFilter::Info, driver);
 }
 
 /// Endpoint 0 (the root endpoint) always runs

@@ -23,7 +23,7 @@ pub mod esp {
             let mut rng = rng.borrow_mut();
 
             buf.iter_mut()
-                .for_each(|byte| *byte = rng.as_mut().unwrap().random() as _);
+                .for_each(|byte| *byte = unwrap!(rng.as_mut()).random() as _);
         })
     }
 }
@@ -63,7 +63,7 @@ pub mod nrf {
     pub fn nrf_rand(buf: &mut [u8]) {
         RAND.lock(|rng| {
             let mut rng = rng.borrow_mut();
-            rng.as_mut().unwrap().blocking_fill_bytes(buf);
+            unwrap!(rng.as_mut()).blocking_fill_bytes(buf);
         })
     }
 }
