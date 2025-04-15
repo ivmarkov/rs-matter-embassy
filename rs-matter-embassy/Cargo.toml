@@ -22,11 +22,11 @@ harness = false
 
 [patch.crates-io]
 #rs-matter = { git = "https://github.com/project-chip/rs-matter" }
-rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "defmt" }
+#rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "next" }
 #rs-matter = { path = "../rs-matter/rs-matter" }
 edge-nal = { git = "https://github.com/ivmarkov/edge-net" }
 edge-nal-embassy = { git = "https://github.com/ivmarkov/edge-net" }
-edge-mdns = { git = "https://github.com/ivmarkov/edge-net", branch = "defmt" }
+edge-mdns = { git = "https://github.com/ivmarkov/edge-net" }
 nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "551a95436e999b4290b4a33383aa3d6747b63dd9" }
 nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "551a95436e999b4290b4a33383aa3d6747b63dd9" }
 #trouble-host = { version = "0.1", git = "https://github.com/embassy-rs/trouble" }
