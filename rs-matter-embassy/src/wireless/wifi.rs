@@ -674,14 +674,14 @@ pub mod esp_wifi {
                     .try_into()));
             }
 
-            let (aps, len) = self
+            let (aps, _len) = self
                 .0
                 .scan_with_config_async::<MAX_NETWORKS>(scan_config)
                 .await
                 .map_err(to_err)?;
 
             info!(
-                "Wifi scan complete, reporting {} results out of {len} total",
+                "Wifi scan complete, reporting {} results out of {_len} total",
                 aps.len()
             );
 
