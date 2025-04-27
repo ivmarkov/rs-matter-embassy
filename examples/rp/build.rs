@@ -51,12 +51,12 @@ fn download_cyw43_firmware() {
     ];
 
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed={}", download_folder);
+    println!("cargo:rerun-if-changed={download_folder}");
     std::fs::create_dir_all(download_folder).expect("Failed to create download directory");
 
     // download each file into the folder "cyw43-firmware"
     for file in file_names {
-        let url = format!("{}/{}", url_base, file);
+        let url = format!("{url_base}/{file}");
         // only fetch if it doesn't exist
         if std::path::Path::new(download_folder).join(file).exists() {
             continue;
@@ -68,8 +68,7 @@ fn download_cyw43_firmware() {
                 std::fs::write(file_path, &content).expect("Failed to write file");
             }
             Err(err) => panic!(
-                "Failed to download the cyw43 firmware from {}: {}, required for pi-pico-w example",
-                url, err
+                "Failed to download the cyw43 firmware from {url}: {err}, required for pi-pico-w example",
             ),
         }
     }
