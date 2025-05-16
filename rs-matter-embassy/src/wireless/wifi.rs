@@ -6,32 +6,36 @@ use embassy_futures::select::select;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 
-use rs_matter_stack::matter::error::Error;
-use rs_matter_stack::matter::utils::rand::Rand;
-use rs_matter_stack::matter::utils::select::Coalesce;
-use rs_matter_stack::network::{Embedding, Network};
-use rs_matter_stack::wireless::{
-    Controller, Gatt, GattTask, Wifi, WifiData, Wireless, WirelessCoex, WirelessCoexTask,
-    WirelessTask,
-};
-
 use crate::ble::{ControllerRef, TroubleBtpGattContext, TroubleBtpGattPeripheral};
 use crate::enet::{create_enet_stack, EnetNetif};
 use crate::eth::EmbassyNetContext;
+use crate::matter::data_model::networks::NetChangeNotif;
+use crate::matter::data_model::sdm::gen_diag::InterfaceTypeEnum;
+use crate::matter::data_model::sdm::net_comm::NetCtl;
+use crate::matter::data_model::sdm::wifi_diag::{WifiDiag, WirelessDiag};
+use crate::stack::matter::data_model::networks::wireless::Wifi;
+use crate::stack::matter::error::Error;
+use crate::stack::matter::utils::rand::Rand;
+use crate::stack::matter::utils::select::Coalesce;
+use crate::stack::network::{Embedding, Network};
+use crate::stack::wireless::{self, Gatt, GattTask};
 
-use super::{BleDriver, BleDriverTask, EmbassyWirelessMatterStack};
+use super::{BleDriver, BleDriverTask, BleDriverTaskImpl, EmbassyWirelessMatterStack};
 
 /// A type alias for an Embassy Matter stack running over Wifi (and BLE, during commissioning).
+///
+/// The difference between this and the `WifiMatterStack` is that all resources necessary for the
+/// operation of `embassy-net` as well as the BLE controller and pre-allocated inside the stack.
 pub type EmbassyWifiMatterStack<'a, E = ()> =
     EmbassyWirelessMatterStack<'a, Wifi, EmbassyNetContext, E>;
 
 /// A trait representing a task that needs access to the Wifi driver and controller to perform its work
 pub trait WifiDriverTask {
     /// Run the task with the given Wifi driver and controller
-    async fn run<D, C>(&mut self, driver: D, controller: C) -> Result<(), Error>
+    async fn run<D, C>(&mut self, driver: D, net_ctl: C) -> Result<(), Error>
     where
         D: embassy_net::driver::Driver,
-        C: Controller<Data = WifiData>;
+        C: NetCtl + NetChangeNotif + WirelessDiag + WifiDiag;
 }
 
 impl<T> WifiDriverTask for &mut T
@@ -39,12 +43,12 @@ where
     T: WifiDriverTask,
 {
     /// Run the task with the given Wifi driver and Wifi controller
-    async fn run<D, C>(&mut self, driver: D, controller: C) -> Result<(), Error>
+    async fn run<D, C>(&mut self, driver: D, net_ctl: C) -> Result<(), Error>
     where
         D: embassy_net::driver::Driver,
-        C: Controller<Data = WifiData>,
+        C: NetCtl + NetChangeNotif + WirelessDiag + WifiDiag,
     {
-        (*self).run(driver, controller).await
+        (*self).run(driver, net_ctl).await
     }
 }
 
@@ -52,15 +56,10 @@ where
 /// as well as to the BLe controller to perform its work
 pub trait WifiCoexDriverTask {
     /// Run the task with the given Wifi driver, Wifi controller and BLE controller
-    async fn run<D, C, B>(
-        &mut self,
-        wifi_driver: D,
-        wifi_controller: C,
-        ble_controller: B,
-    ) -> Result<(), Error>
+    async fn run<D, C, B>(&mut self, wifi_driver: D, net_ctl: C, ble_ctl: B) -> Result<(), Error>
     where
         D: embassy_net::driver::Driver,
-        C: Controller<Data = WifiData>,
+        C: NetCtl + NetChangeNotif + WirelessDiag + WifiDiag,
         B: trouble_host::Controller;
 }
 
@@ -68,20 +67,13 @@ impl<T> WifiCoexDriverTask for &mut T
 where
     T: WifiCoexDriverTask,
 {
-    async fn run<D, C, B>(
-        &mut self,
-        wifi_driver: D,
-        wifi_controller: C,
-        ble_controller: B,
-    ) -> Result<(), Error>
+    async fn run<D, C, B>(&mut self, wifi_driver: D, net_ctl: C, ble_ctl: B) -> Result<(), Error>
     where
         D: embassy_net::driver::Driver,
-        C: Controller<Data = WifiData>,
+        C: NetCtl + NetChangeNotif + WirelessDiag + WifiDiag,
         B: trouble_host::Controller,
     {
-        (*self)
-            .run(wifi_driver, wifi_controller, ble_controller)
-            .await
+        (*self).run(wifi_driver, net_ctl, ble_ctl).await
     }
 }
 
@@ -131,21 +123,21 @@ pub struct PreexistingWifiDriver<D, C, B>(D, C, B);
 
 impl<D, C, B> PreexistingWifiDriver<D, C, B> {
     /// Create a new instance of the `PreexistingWifiDriver` type.
-    pub const fn new(enet_wifi_driver: D, wifi_controller: C, ble_controller: B) -> Self {
-        Self(enet_wifi_driver, wifi_controller, ble_controller)
+    pub const fn new(enet_wifi_driver: D, net_ctl: C, ble_ctl: B) -> Self {
+        Self(enet_wifi_driver, net_ctl, ble_ctl)
     }
 }
 
 impl<D, C, B> WifiDriver for PreexistingWifiDriver<D, C, B>
 where
     D: embassy_net::driver::Driver,
-    C: Controller<Data = WifiData>,
+    C: NetCtl + NetChangeNotif + WirelessDiag + WifiDiag,
 {
     async fn run<A>(&mut self, mut task: A) -> Result<(), Error>
     where
         A: WifiDriverTask,
     {
-        task.run(&mut self.0, &mut self.1).await
+        task.run(&mut self.0, &self.1).await
     }
 }
 
@@ -164,14 +156,14 @@ where
 impl<D, C, B> WifiCoexDriver for PreexistingWifiDriver<D, C, B>
 where
     D: embassy_net::driver::Driver,
-    C: Controller<Data = WifiData>,
+    C: NetCtl + NetChangeNotif + WirelessDiag + WifiDiag,
     B: trouble_host::Controller,
 {
     async fn run<A>(&mut self, mut task: A) -> Result<(), Error>
     where
         A: WifiCoexDriverTask,
     {
-        task.run(&mut self.0, &mut self.1, ControllerRef::new(&self.2))
+        task.run(&mut self.0, &self.1, ControllerRef::new(&self.2))
             .await
     }
 }
@@ -214,55 +206,14 @@ impl<'a, T> EmbassyWifi<'a, T> {
     }
 }
 
-impl<T> Wireless for EmbassyWifi<'_, T>
+impl<T> wireless::Wifi for EmbassyWifi<'_, T>
 where
     T: WifiDriver,
 {
-    type Data = WifiData;
-
     async fn run<A>(&mut self, task: A) -> Result<(), Error>
     where
-        A: WirelessTask<Data = Self::Data>,
+        A: wireless::WifiTask,
     {
-        struct WifiDriverTaskImpl<'a, A> {
-            context: &'a EmbassyNetContext,
-            rand: Rand,
-            task: A,
-        }
-
-        impl<A> WifiDriverTask for WifiDriverTaskImpl<'_, A>
-        where
-            A: WirelessTask<Data = WifiData>,
-        {
-            async fn run<D, C>(&mut self, driver: D, controller: C) -> Result<(), Error>
-            where
-                D: embassy_net::driver::Driver,
-                C: Controller<Data = WifiData>,
-            {
-                let mut resources = self.context.resources.lock().await;
-                let resources = &mut *resources;
-                let buffers = &self.context.buffers;
-
-                let mut seed = [0; core::mem::size_of::<u64>()];
-                (self.rand)(&mut seed);
-
-                let (stack, mut runner) =
-                    create_enet_stack(driver, u64::from_le_bytes(seed), resources);
-
-                let netif = EnetNetif::new(stack);
-                let udp = Udp::new(stack, buffers);
-
-                let mut main = pin!(self.task.run(netif, udp, controller));
-                let mut run = pin!(async {
-                    runner.run().await;
-                    #[allow(unreachable_code)]
-                    Ok(())
-                });
-
-                select(&mut main, &mut run).coalesce().await
-            }
-        }
-
         self.driver
             .run(WifiDriverTaskImpl {
                 context: self.context,
@@ -273,65 +224,14 @@ where
     }
 }
 
-impl<T> WirelessCoex for EmbassyWifi<'_, T>
+impl<T> wireless::WifiCoex for EmbassyWifi<'_, T>
 where
     T: WifiCoexDriver,
 {
-    type Data = WifiData;
-
     async fn run<A>(&mut self, task: A) -> Result<(), Error>
     where
-        A: WirelessCoexTask<Data = Self::Data>,
+        A: wireless::WifiCoexTask,
     {
-        struct WifiCoexDriverTaskImpl<'a, A> {
-            context: &'a EmbassyNetContext,
-            ble_context: &'a TroubleBtpGattContext<CriticalSectionRawMutex>,
-            rand: Rand,
-            task: A,
-        }
-
-        impl<A> WifiCoexDriverTask for WifiCoexDriverTaskImpl<'_, A>
-        where
-            A: WirelessCoexTask<Data = WifiData>,
-        {
-            async fn run<D, C, B>(
-                &mut self,
-                wifi_driver: D,
-                wifi_controller: C,
-                ble_controller: B,
-            ) -> Result<(), Error>
-            where
-                D: embassy_net::driver::Driver,
-                C: Controller<Data = WifiData>,
-                B: trouble_host::Controller,
-            {
-                let mut resources = self.context.resources.lock().await;
-                let resources = &mut *resources;
-                let buffers = &self.context.buffers;
-
-                let mut seed = [0; core::mem::size_of::<u64>()];
-                (self.rand)(&mut seed);
-
-                let (stack, mut runner) =
-                    create_enet_stack(wifi_driver, u64::from_le_bytes(seed), resources);
-
-                let netif = EnetNetif::new(stack);
-                let udp = Udp::new(stack, buffers);
-
-                let peripheral =
-                    TroubleBtpGattPeripheral::new(ble_controller, self.rand, self.ble_context);
-
-                let mut main = pin!(self.task.run(netif, udp, wifi_controller, peripheral));
-                let mut run = pin!(async {
-                    runner.run().await;
-                    #[allow(unreachable_code)]
-                    Ok(())
-                });
-
-                select(&mut main, &mut run).coalesce().await
-            }
-        }
-
         self.driver
             .run(WifiCoexDriverTaskImpl {
                 context: self.context,
@@ -351,26 +251,6 @@ where
     where
         A: GattTask,
     {
-        struct BleDriverTaskImpl<'a, A> {
-            task: A,
-            rand: Rand,
-            context: &'a TroubleBtpGattContext<CriticalSectionRawMutex>,
-        }
-
-        impl<A> BleDriverTask for BleDriverTaskImpl<'_, A>
-        where
-            A: GattTask,
-        {
-            async fn run<C>(&mut self, controller: C) -> Result<(), Error>
-            where
-                C: trouble_host::Controller,
-            {
-                let peripheral = TroubleBtpGattPeripheral::new(controller, self.rand, self.context);
-
-                self.task.run(&peripheral).await
-            }
-        }
-
         self.driver
             .run(BleDriverTaskImpl {
                 task,
@@ -378,143 +258,6 @@ where
                 context: self.ble_context,
             })
             .await
-    }
-}
-
-#[cfg(feature = "rp")]
-pub mod rp {
-    use cyw43::{Control, JoinOptions, ScanOptions};
-
-    use crate::fmt::Bytes;
-    use crate::matter::data_model::sdm::nw_commissioning::{WiFiSecurity, WifiBand};
-    use crate::matter::error::{Error, ErrorCode};
-    use crate::matter::tlv::OctetsOwned;
-    use crate::matter::utils::storage::Vec;
-    use crate::stack::wireless::{
-        Controller, NetworkCredentials, WifiData, WifiScanResult, WifiSsid, WirelessData,
-    };
-
-    /// An adaptor from the `cyw43` Wifi controller API to the `rs-matter` Wifi controller API
-    pub struct Cyw43WifiController<'a>(Control<'a>, Option<WifiSsid>);
-
-    impl<'a> Cyw43WifiController<'a> {
-        /// Create a new instance of the `Cyw43WifiController` type.
-        ///
-        /// # Arguments
-        /// - `controller` - The `cyw43` Wifi controller instance.
-        pub const fn new(controller: Control<'a>) -> Self {
-            Self(controller, None)
-        }
-    }
-
-    impl Controller for Cyw43WifiController<'_> {
-        type Data = WifiData;
-
-        async fn scan<F>(
-            &mut self,
-            network_id: Option<
-                &<<Self::Data as WirelessData>::NetworkCredentials as NetworkCredentials>::NetworkId,
-            >,
-            mut callback: F,
-        ) -> Result<(), Error>
-        where
-            F: FnMut(Option<&<Self::Data as WirelessData>::ScanResult>) -> Result<(), Error>,
-        {
-            info!("Wifi scan request");
-
-            let mut scan_options = ScanOptions::default();
-            //scan_options.scan_type = ScanType::Active;
-
-            if let Some(network_id) = network_id {
-                scan_options.ssid =
-                    Some(unwrap!(core::str::from_utf8(network_id.0.vec.as_slice())
-                        .unwrap_or("???")
-                        .try_into()));
-            }
-
-            let mut scanner = self.0.scan(scan_options).await;
-
-            info!("Wifi scan started");
-
-            while let Some(ap) = scanner.next().await {
-                if ap.ssid_len > 0 {
-                    let result = WifiScanResult {
-                        ssid: WifiSsid(OctetsOwned {
-                            vec: unwrap!(Vec::from_slice(&ap.ssid[..ap.ssid_len as _])),
-                        }),
-                        bssid: OctetsOwned {
-                            vec: unwrap!(Vec::from_slice(&ap.bssid)),
-                        },
-                        channel: ap.chanspec,
-                        rssi: Some(ap.rssi as _),
-                        band: Some(WifiBand::B2G4), // cyw43 only supports 2.4GHz
-                        security: WiFiSecurity::WPA2_PERSONAL, // TODO
-                    };
-
-                    callback(Some(&result))?;
-
-                    info!("Scan result {:?}", result);
-                } else {
-                    info!(
-                        "Skipping scan result for a hidden network {}",
-                        Bytes(&ap.bssid)
-                    );
-                }
-            }
-
-            callback(None)?;
-
-            info!("Wifi scan complete");
-
-            Ok(())
-        }
-
-        async fn connect(
-            &mut self,
-            creds: &<Self::Data as WirelessData>::NetworkCredentials,
-        ) -> Result<(), Error> {
-            let ssid = core::str::from_utf8(creds.ssid.0.vec.as_slice()).unwrap_or("???");
-
-            info!("Wifi connect request for SSID {}", ssid);
-
-            self.1 = None;
-
-            self.0.leave().await;
-            info!("Disconnected from current Wifi AP (if any)");
-
-            self.0
-                .join(ssid, JoinOptions::new(creds.password.as_bytes())) // TODO: Try with something else besides Wpa2Wpa3
-                .await
-                .map_err(to_err)?;
-
-            info!("Wifi connected");
-
-            self.1 = Some(creds.ssid.clone());
-
-            info!("Wifi connect complete");
-
-            Ok(())
-        }
-
-        async fn connected_network(
-            &mut self,
-        ) -> Result<
-            Option<
-                <<Self::Data as WirelessData>::NetworkCredentials as NetworkCredentials>::NetworkId,
-            >,
-            Error,
-        > {
-            Ok(self.1.clone())
-        }
-
-        async fn stats(&mut self) -> Result<<Self::Data as WirelessData>::Stats, Error> {
-            Ok(None)
-        }
-    }
-
-    fn to_err(e: cyw43::ControlError) -> Error {
-        error!("Wifi error: {:?}", debug2format!(e));
-        Error::new(ErrorCode::NoNetworkInterface)
     }
 }
 
@@ -528,30 +271,19 @@ pub mod rp {
 pub mod esp_wifi {
     use bt_hci::controller::ExternalController;
 
-    use esp_hal::peripheral::{Peripheral, PeripheralRef};
+    use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 
     use esp_wifi::ble::controller::BleConnector;
-    use esp_wifi::wifi::{
-        AuthMethod, ClientConfiguration, Configuration, ScanConfig, WifiController, WifiError,
-        WifiStaDevice,
-    };
 
-    use crate::matter::data_model::sdm::nw_commissioning::{WiFiSecurity, WifiBand};
-    use crate::matter::error::{Error, ErrorCode};
-    use crate::matter::tlv::OctetsOwned;
-    use crate::matter::utils::storage::Vec;
-    use crate::stack::wireless::{
-        Controller, NetworkCredentials, WifiData, WifiScanResult, WifiSsid, WirelessData,
-    };
+    use crate::matter::error::Error;
+    use crate::wifi::esp::EspWifiController;
     use crate::wireless::SLOTS;
-
-    const MAX_NETWORKS: usize = 3;
 
     /// A `WifiDriver` implementation for the ESP32 family of chips.
     pub struct EspWifiDriver<'a, 'd> {
         controller: &'a esp_wifi::EspWifiController<'d>,
-        wifi_peripheral: PeripheralRef<'d, esp_hal::peripherals::WIFI>,
-        bt_peripheral: PeripheralRef<'d, esp_hal::peripherals::BT>,
+        wifi_peripheral: esp_hal::peripherals::WIFI<'d>,
+        bt_peripheral: esp_hal::peripherals::BT<'d>,
     }
 
     impl<'a, 'd> EspWifiDriver<'a, 'd> {
@@ -562,13 +294,13 @@ pub mod esp_wifi {
         /// - `peripheral` - The Wifi peripheral instance.
         pub fn new(
             controller: &'a esp_wifi::EspWifiController<'d>,
-            wifi_peripheral: impl Peripheral<P = esp_hal::peripherals::WIFI> + 'd,
-            bt_peripheral: impl Peripheral<P = esp_hal::peripherals::BT> + 'd,
+            wifi_peripheral: esp_hal::peripherals::WIFI<'d>,
+            bt_peripheral: esp_hal::peripherals::BT<'d>,
         ) -> Self {
             Self {
                 controller,
-                wifi_peripheral: wifi_peripheral.into_ref(),
-                bt_peripheral: bt_peripheral.into_ref(),
+                wifi_peripheral,
+                bt_peripheral,
             }
         }
     }
@@ -578,17 +310,19 @@ pub mod esp_wifi {
         where
             A: super::WifiDriverTask,
         {
-            let (wifi_interface, mut controller) = unwrap!(esp_wifi::wifi::new_with_mode(
+            let (mut controller, wifi_interface) = unwrap!(esp_wifi::wifi::new(
                 self.controller,
-                &mut self.wifi_peripheral,
-                WifiStaDevice,
+                self.wifi_peripheral.reborrow(),
             ));
 
             // esp32c6-specific - need to boost the power to get a good signal
             unwrap!(controller.set_power_saving(esp_wifi::config::PowerSaveMode::None));
 
-            task.run(wifi_interface, EspWifiController::new(controller))
-                .await
+            task.run(
+                wifi_interface.sta,
+                EspWifiController::<NoopRawMutex>::new(controller),
+            )
+            .await
         }
     }
 
@@ -597,24 +331,23 @@ pub mod esp_wifi {
         where
             A: super::WifiCoexDriverTask,
         {
-            let (wifi_interface, mut controller) = unwrap!(esp_wifi::wifi::new_with_mode(
+            let (mut controller, wifi_interface) = unwrap!(esp_wifi::wifi::new(
                 self.controller,
-                &mut self.wifi_peripheral,
-                WifiStaDevice,
+                self.wifi_peripheral.reborrow(),
             ));
 
             // esp32c6-specific - need to boost the power to get a good signal
             unwrap!(controller.set_power_saving(esp_wifi::config::PowerSaveMode::None));
 
-            let ble_controller = ExternalController::<_, SLOTS>::new(BleConnector::new(
+            let ble_ctl = ExternalController::<_, SLOTS>::new(BleConnector::new(
                 self.controller,
-                &mut self.bt_peripheral,
+                self.bt_peripheral.reborrow(),
             ));
 
             task.run(
-                wifi_interface,
-                EspWifiController::new(controller),
-                ble_controller,
+                wifi_interface.sta,
+                EspWifiController::<NoopRawMutex>::new(controller),
+                ble_ctl,
             )
             .await
         }
@@ -627,168 +360,91 @@ pub mod esp_wifi {
         {
             let ble_controller = ExternalController::<_, SLOTS>::new(BleConnector::new(
                 self.controller,
-                &mut self.bt_peripheral,
+                self.bt_peripheral.reborrow(),
             ));
 
             task.run(ble_controller).await
         }
     }
+}
 
-    /// An adaptor from the `esp-wifi` Wifi controller API to the `rs-matter` Wifi controller API
-    pub struct EspWifiController<'a>(WifiController<'a>, Option<WifiSsid>);
+struct WifiDriverTaskImpl<'a, A> {
+    context: &'a EmbassyNetContext,
+    rand: Rand,
+    task: A,
+}
 
-    impl<'a> EspWifiController<'a> {
-        /// Create a new instance of the `Esp32Controller` type.
-        ///
-        /// # Arguments
-        /// - `controller` - The `esp-wifi` Wifi controller instance.
-        pub const fn new(controller: WifiController<'a>) -> Self {
-            Self(controller, None)
-        }
-    }
+impl<A> WifiDriverTask for WifiDriverTaskImpl<'_, A>
+where
+    A: wireless::WifiTask,
+{
+    async fn run<D, C>(&mut self, driver: D, net_ctl: C) -> Result<(), Error>
+    where
+        D: embassy_net::driver::Driver,
+        C: NetCtl + NetChangeNotif + WirelessDiag + WifiDiag,
+    {
+        let mut resources = self.context.resources.lock().await;
+        let resources = &mut *resources;
+        let buffers = &self.context.buffers;
 
-    impl Controller for EspWifiController<'_> {
-        type Data = WifiData;
+        let mut seed = [0; core::mem::size_of::<u64>()];
+        (self.rand)(&mut seed);
 
-        async fn scan<F>(
-            &mut self,
-            network_id: Option<
-                &<<Self::Data as WirelessData>::NetworkCredentials as NetworkCredentials>::NetworkId,
-            >,
-            mut callback: F,
-        ) -> Result<(), Error>
-        where
-            F: FnMut(Option<&<Self::Data as WirelessData>::ScanResult>) -> Result<(), Error>,
-        {
-            info!("Wifi scan request");
+        let (stack, mut runner) = create_enet_stack(driver, u64::from_le_bytes(seed), resources);
 
-            if !self.0.is_started().map_err(to_err)? {
-                self.0.start_async().await.map_err(to_err)?;
-                info!("Wifi started");
-            }
+        let netif = EnetNetif::new(stack, InterfaceTypeEnum::WiFi);
+        let udp = Udp::new(stack, buffers);
 
-            let mut scan_config = ScanConfig::default();
-            if let Some(network_id) = network_id {
-                scan_config.ssid = Some(unwrap!(core::str::from_utf8(network_id.0.vec.as_slice())
-                    .unwrap_or("???")
-                    .try_into()));
-            }
-
-            let (aps, _len) = self
-                .0
-                .scan_with_config_async::<MAX_NETWORKS>(scan_config)
-                .await
-                .map_err(to_err)?;
-
-            info!(
-                "Wifi scan complete, reporting {} results out of {_len} total",
-                aps.len()
-            );
-
-            for ap in aps {
-                let result = WifiScanResult {
-                    ssid: WifiSsid(OctetsOwned {
-                        vec: unwrap!(ap.ssid.as_bytes().try_into()),
-                    }),
-                    bssid: OctetsOwned {
-                        vec: unwrap!(Vec::from_slice(&ap.bssid)),
-                    },
-                    channel: ap.channel as _,
-                    rssi: Some(ap.signal_strength),
-                    band: Some(WifiBand::B2G4), // TODO: Once c5 is out we can no longer hard-code this
-                    security: match ap.auth_method {
-                        Some(AuthMethod::None) => WiFiSecurity::UNENCRYPTED,
-                        Some(AuthMethod::WEP) => WiFiSecurity::WEP,
-                        Some(AuthMethod::WPA) => WiFiSecurity::WPA_PERSONAL,
-                        Some(AuthMethod::WPA2Personal) => WiFiSecurity::WPA2_PERSONAL,
-                        Some(AuthMethod::WPAWPA2Personal) => {
-                            WiFiSecurity::WPA_PERSONAL | WiFiSecurity::WPA2_PERSONAL
-                        }
-                        Some(AuthMethod::WPA2WPA3Personal) => {
-                            WiFiSecurity::WPA2_PERSONAL | WiFiSecurity::WPA3_PERSONAL
-                        }
-                        Some(AuthMethod::WPA2Enterprise) => WiFiSecurity::WPA2_PERSONAL,
-                        _ => WiFiSecurity::WPA2_PERSONAL, // Best guess
-                    },
-                };
-
-                callback(Some(&result))?;
-
-                info!("Scan result {:?}", result);
-            }
-
-            callback(None)?;
-
-            info!("Wifi scan complete");
-
+        let mut main = pin!(self.task.run(udp, netif, net_ctl));
+        let mut run = pin!(async {
+            runner.run().await;
+            #[allow(unreachable_code)]
             Ok(())
-        }
+        });
 
-        async fn connect(
-            &mut self,
-            creds: &<Self::Data as WirelessData>::NetworkCredentials,
-        ) -> Result<(), Error> {
-            let ssid = core::str::from_utf8(creds.ssid.0.vec.as_slice()).unwrap_or("???");
-
-            if self.1.as_ref() == Some(&creds.ssid) && self.0.is_connected().map_err(to_err)? {
-                info!("Wifi connect request for an already connected SSID {ssid}");
-                return Ok(());
-            }
-
-            info!("Wifi connect request for SSID {ssid}");
-
-            self.1 = None;
-
-            if self.0.is_started().map_err(to_err)? {
-                self.0.stop_async().await.map_err(to_err)?;
-                info!("Wifi stopped");
-            }
-
-            self.0
-                .set_configuration(&Configuration::Client(ClientConfiguration {
-                    ssid: unwrap!(ssid.try_into()),
-                    password: creds.password.clone(),
-                    ..Default::default() // TODO: Try something else besides WPA2-Personal
-                }))
-                .map_err(to_err)?;
-            info!("Wifi configuration updated");
-
-            self.0.start_async().await.map_err(to_err)?;
-            info!("Wifi started");
-
-            self.0.connect_async().await.map_err(to_err)?;
-
-            info!("Wifi connected");
-
-            self.1 = self
-                .0
-                .is_connected()
-                .map_err(to_err)?
-                .then_some(creds.ssid.clone());
-
-            info!("Wifi connect complete");
-
-            Ok(())
-        }
-
-        async fn connected_network(
-            &mut self,
-        ) -> Result<
-            Option<
-                <<Self::Data as WirelessData>::NetworkCredentials as NetworkCredentials>::NetworkId,
-            >,
-            Error,
-        > {
-            Ok(self.1.clone())
-        }
-
-        async fn stats(&mut self) -> Result<<Self::Data as WirelessData>::Stats, Error> {
-            Ok(None)
-        }
+        select(&mut main, &mut run).coalesce().await
     }
+}
 
-    fn to_err(e: WifiError) -> Error {
-        error!("Wifi error: {:?}", e);
-        Error::new(ErrorCode::NoNetworkInterface)
+struct WifiCoexDriverTaskImpl<'a, A> {
+    context: &'a EmbassyNetContext,
+    ble_context: &'a TroubleBtpGattContext<CriticalSectionRawMutex>,
+    rand: Rand,
+    task: A,
+}
+
+impl<A> WifiCoexDriverTask for WifiCoexDriverTaskImpl<'_, A>
+where
+    A: wireless::WifiCoexTask,
+{
+    async fn run<D, C, B>(&mut self, wifi_driver: D, net_ctl: C, ble_ctl: B) -> Result<(), Error>
+    where
+        D: embassy_net::driver::Driver,
+        C: NetCtl + NetChangeNotif + WirelessDiag + WifiDiag,
+        B: trouble_host::Controller,
+    {
+        let mut resources = self.context.resources.lock().await;
+        let resources = &mut *resources;
+        let buffers = &self.context.buffers;
+
+        let mut seed = [0; core::mem::size_of::<u64>()];
+        (self.rand)(&mut seed);
+
+        let (stack, mut runner) =
+            create_enet_stack(wifi_driver, u64::from_le_bytes(seed), resources);
+
+        let netif = EnetNetif::new(stack, InterfaceTypeEnum::WiFi);
+        let udp = Udp::new(stack, buffers);
+
+        let peripheral = TroubleBtpGattPeripheral::new(ble_ctl, self.rand, self.ble_context);
+
+        let mut main = pin!(self.task.run(udp, netif, net_ctl, peripheral));
+        let mut run = pin!(async {
+            runner.run().await;
+            #[allow(unreachable_code)]
+            Ok(())
+        });
+
+        select(&mut main, &mut run).coalesce().await
     }
 }

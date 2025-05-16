@@ -8,18 +8,21 @@ use edge_nal_embassy::Udp;
 use embassy_futures::select::select;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 
-use rs_matter_stack::eth::{Eth, Ethernet, EthernetTask};
-use rs_matter_stack::matter::error::Error;
-use rs_matter_stack::matter::utils::init::{init, Init};
-use rs_matter_stack::matter::utils::rand::Rand;
-use rs_matter_stack::matter::utils::select::Coalesce;
-use rs_matter_stack::matter::utils::sync::IfMutex;
-use rs_matter_stack::network::{Embedding, Network};
-use rs_matter_stack::MatterStack;
-
 use crate::enet::{create_enet_stack, EnetMatterStackResources, EnetMatterUdpBuffers, EnetNetif};
+use crate::matter::data_model::sdm::gen_diag::InterfaceTypeEnum;
+use crate::matter::error::Error;
+use crate::matter::utils::init::{init, Init};
+use crate::matter::utils::rand::Rand;
+use crate::matter::utils::select::Coalesce;
+use crate::matter::utils::sync::IfMutex;
+use crate::stack::eth::{Eth, Ethernet, EthernetTask};
+use crate::stack::network::{Embedding, Network};
+use crate::stack::MatterStack;
 
 /// A type alias for an Embassy Matter stack running over an Ethernet network.
+///
+/// The difference between this and `EthMatterStack` is that all resources necessary for the
+/// operation of `embassy-net` are pre-allocated inside the stack.
 pub type EmbassyEthMatterStack<'a, E = ()> = MatterStack<'a, EmbassyEth<E>>;
 
 /// A type alias for an Embassy implementation of the `Network` trait for a Matter stack running over
@@ -205,10 +208,10 @@ where
                 let (stack, mut runner) =
                     create_enet_stack(driver, u64::from_le_bytes(seed), resources);
 
-                let netif = EnetNetif::new(stack);
+                let netif = EnetNetif::new(stack, InterfaceTypeEnum::Ethernet);
                 let udp = Udp::new(stack, buffers);
 
-                let mut main = pin!(self.task.run(netif, udp));
+                let mut main = pin!(self.task.run(udp, netif));
                 let mut run = pin!(async {
                     runner.run().await;
                     #[allow(unreachable_code)]

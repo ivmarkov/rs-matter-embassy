@@ -33,19 +33,29 @@ overflow-checks = false
 #rs-matter = { git = "https://github.com/project-chip/rs-matter" }
 rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "next" }
 #rs-matter = { path = "../../../rs-matter/rs-matter" }
-edge-nal = { git = "https://github.com/ivmarkov/edge-net" }
-edge-nal-embassy = { git = "https://github.com/ivmarkov/edge-net" }
-edge-mdns = { git = "https://github.com/ivmarkov/edge-net" }
-nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "551a95436e999b4290b4a33383aa3d6747b63dd9" }
-nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "551a95436e999b4290b4a33383aa3d6747b63dd9" }
+#edge-nal = { git = "https://github.com/ivmarkov/edge-net" }
+#edge-nal-embassy = { git = "https://github.com/ivmarkov/edge-net" }
+#edge-mdns = { git = "https://github.com/ivmarkov/edge-net" }
+nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc.git" }
+nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git" }
 #trouble-host = { version = "0.1", git = "https://github.com/embassy-rs/trouble" }
+trouble-host = { version = "0.1", git = "https://github.com/ivmarkov/trouble", branch = "restore-pub" }
+#trouble-host = { version = "0.1", path = "../../../trouble/host" }
+embassy-nrf = { version = "0.3", git = "https://github.com/embassy-rs/embassy" }
+embassy-sync = { version = "0.7", git = "https://github.com/embassy-rs/embassy" }
+embassy-time = { version = "0.4", git = "https://github.com/embassy-rs/embassy" }
+embassy-time-driver = { version = "0.2", git = "https://github.com/embassy-rs/embassy" }
+embassy-time-queue-utils = { version = "0.1", git = "https://github.com/embassy-rs/embassy" }
+embassy-net-driver = { version = "0.2", git = "https://github.com/embassy-rs/embassy" }
+embassy-net-driver-channel = { version = "0.3", git = "https://github.com/embassy-rs/embassy" }
+embassy-executor = { version = "0.7", git = "https://github.com/embassy-rs/embassy" }
 
 [dependencies]
-embassy-executor = { version = "0.7", default-features = false, features = ["task-arena-size-65536", "arch-cortex-m", "executor-thread", "executor-interrupt", "defmt"] }
+embassy-executor = { version = "0.7", default-features = false, features = ["arch-cortex-m", "executor-thread", "executor-interrupt", "defmt"] }
 embassy-time = { version = "0.4", default-features = false, features = ["defmt", "defmt-timestamp-uptime-ms"] }
 embassy-nrf = { version = "0.3.1", features = ["defmt", "time-driver-rtc1", "time", "nrf52840"], default-features = false }
 embassy-futures = "0.1.1"
-embassy-sync = { version = "0.6", features = ["defmt"] }
+embassy-sync = { version = "0.7", features = ["defmt"] }
 defmt = "0.3"
 embedded-alloc = "0.6"
 rs-matter-embassy = { path = "../../rs-matter-embassy", features = ["nrf", "openthread", "defmt"] }
