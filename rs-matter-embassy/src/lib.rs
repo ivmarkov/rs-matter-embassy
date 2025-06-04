@@ -26,5 +26,6 @@ pub mod persist;
 pub mod rand;
 #[cfg(feature = "rs-matter-stack")]
 pub mod stack;
+pub mod wifi;
 #[cfg(feature = "rs-matter-stack")]
 pub mod wireless;

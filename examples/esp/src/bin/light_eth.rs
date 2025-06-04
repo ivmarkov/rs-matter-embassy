@@ -8,6 +8,7 @@
 //! The example implements a fictitious Light device (an On-Off Matter cluster).
 #![no_std]
 #![no_main]
+#![recursion_limit = "256"]
 
 use core::env;
 use core::mem::MaybeUninit;
@@ -20,27 +21,28 @@ use embassy_futures::select::select3;
 use embassy_time::{Duration, Timer};
 
 use esp_backtrace as _;
-use esp_hal::{clock::CpuClock, timer::timg::TimerGroup};
-use esp_wifi::wifi::{
-    ClientConfiguration, Configuration, WifiController, WifiEvent, WifiStaDevice, WifiState,
-};
+use esp_hal::timer::timg::TimerGroup;
+use esp_wifi::wifi::{ClientConfiguration, Configuration, WifiController, WifiEvent, WifiState};
 
 use log::info;
 
 use rs_matter_embassy::epoch::epoch;
 use rs_matter_embassy::eth::{EmbassyEthMatterStack, EmbassyEthernet, PreexistingEthDriver};
-use rs_matter_embassy::matter::data_model::cluster_basic_information::BasicInfoConfig;
-use rs_matter_embassy::matter::data_model::cluster_on_off;
+use rs_matter_embassy::matter::data_model::basic_info::BasicInfoConfig;
 use rs_matter_embassy::matter::data_model::device_types::DEV_TYPE_ON_OFF_LIGHT;
-use rs_matter_embassy::matter::data_model::objects::{Dataver, Endpoint, HandlerCompat, Node};
-use rs_matter_embassy::matter::data_model::system_model::descriptor;
+use rs_matter_embassy::matter::data_model::objects::{
+    Async, Dataver, EmptyHandler, Endpoint, Node,
+};
+use rs_matter_embassy::matter::data_model::on_off::{self, ClusterHandler as _};
+use rs_matter_embassy::matter::data_model::system_model::desc::{self, ClusterHandler as _};
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
+use rs_matter_embassy::matter::{clusters, devices};
 use rs_matter_embassy::rand::esp::{esp_init_rand, esp_rand};
-use rs_matter_embassy::stack::persist::DummyKvBlobStore;
-use rs_matter_embassy::stack::test_device::{
-    TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
+use rs_matter_embassy::stack::matter::test_device::{
+    TEST_DEV_ATT, TEST_DEV_COMM, TEST_PID, TEST_VID,
 };
+use rs_matter_embassy::stack::persist::DummyKvBlobStore;
 use rs_matter_embassy::stack::utils::futures::IntoFaillble;
 use rs_matter_embassy::stack::MdnsType;
 
@@ -58,11 +60,7 @@ async fn main(_s: Spawner) {
     // == Step 1: ==
     // Necessary `esp-hal` and `esp-wifi` initialization boilerplate
 
-    let peripherals = esp_hal::init({
-        let mut config = esp_hal::Config::default();
-        config.cpu_clock = CpuClock::max();
-        config
-    });
+    let peripherals = esp_hal::init(esp_hal::Config::default());
 
     // Heap strictly necessary only for Wifi and for the only Matter dependency which needs (~4KB) alloc - `x509`
     // However since `esp32` specifically has a disjoint heap which causes bss size troubles, it is easier
@@ -104,7 +102,7 @@ async fn main(_s: Spawner) {
             sai: None,
             sii: None,
         },
-        TEST_BASIC_COMM_DATA,
+        TEST_DEV_COMM,
         &TEST_DEV_ATT,
         MdnsType::Builtin,
         epoch,
@@ -113,31 +111,26 @@ async fn main(_s: Spawner) {
 
     // Configure and start the Wifi first
     let wifi = peripherals.WIFI;
-    let (wifi_interface, controller) =
-        esp_wifi::wifi::new_with_mode(&init, wifi, WifiStaDevice).unwrap();
+    let (controller, wifi_interface) = esp_wifi::wifi::new(&init, wifi).unwrap();
 
     // Our "light" on-off cluster.
     // Can be anything implementing `rs_matter::data_model::AsyncHandler`
-    let on_off = cluster_on_off::OnOffCluster::new(Dataver::new_rand(stack.matter().rand()));
+    let on_off = on_off::OnOffHandler::new(Dataver::new_rand(stack.matter().rand()));
 
-    // Chain our endpoint clusters with the
-    // (root) Endpoint 0 system clusters in the final handler
-    let handler = stack
-        .root_handler()
+    // Chain our endpoint clusters
+    let handler = EmptyHandler
         // Our on-off cluster, on Endpoint 1
         .chain(
             LIGHT_ENDPOINT_ID,
-            cluster_on_off::ID,
-            HandlerCompat(&on_off),
+            on_off::OnOffHandler::CLUSTER.id,
+            Async(on_off::HandlerAdaptor(&on_off)),
         )
         // Each Endpoint needs a Descriptor cluster too
         // Just use the one that `rs-matter` provides out of the box
         .chain(
             LIGHT_ENDPOINT_ID,
-            descriptor::ID,
-            HandlerCompat(descriptor::DescriptorCluster::new(Dataver::new_rand(
-                stack.matter().rand(),
-            ))),
+            desc::DescHandler::CLUSTER.id,
+            Async(desc::DescHandler::new(Dataver::new_rand(stack.matter().rand())).adapt()),
         );
 
     // Run the Matter stack with our handler
@@ -146,13 +139,13 @@ async fn main(_s: Spawner) {
     let store = stack.create_shared_store(DummyKvBlobStore);
     let mut matter = pin!(stack.run(
         // The Matter stack needs the ethernet inteface to run
-        EmbassyEthernet::new(PreexistingEthDriver::new(wifi_interface), stack),
+        EmbassyEthernet::new(PreexistingEthDriver::new(wifi_interface.sta), stack),
         // The Matter stack needs a persister to store its state
         &store,
         // Our `AsyncHandler` + `AsyncMetadata` impl
         (NODE, handler),
         // No user future to run
-        core::future::pending(),
+        (),
     ));
 
     // Just for demoing purposes:
@@ -198,8 +191,8 @@ async fn connection(mut controller: WifiController<'_>) {
         }
         if !matches!(controller.is_started(), Ok(true)) {
             let client_config = Configuration::Client(ClientConfiguration {
-                ssid: WIFI_SSID.try_into().unwrap(),
-                password: WIFI_PASS.try_into().unwrap(),
+                ssid: WIFI_SSID.into(),
+                password: WIFI_PASS.into(),
                 ..Default::default()
             });
             controller.set_configuration(&client_config).unwrap();
@@ -227,11 +220,11 @@ const LIGHT_ENDPOINT_ID: u16 = 1;
 const NODE: Node = Node {
     id: 0,
     endpoints: &[
-        EmbassyEthMatterStack::<()>::root_metadata(),
+        EmbassyEthMatterStack::<()>::root_endpoint(),
         Endpoint {
             id: LIGHT_ENDPOINT_ID,
-            device_types: &[DEV_TYPE_ON_OFF_LIGHT],
-            clusters: &[descriptor::CLUSTER, cluster_on_off::CLUSTER],
+            device_types: devices!(DEV_TYPE_ON_OFF_LIGHT),
+            clusters: clusters!(desc::DescHandler::CLUSTER, on_off::OnOffHandler::CLUSTER),
         },
     ],
 };

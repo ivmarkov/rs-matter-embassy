@@ -1,34 +1,31 @@
 use core::pin::pin;
 
-use embassy_futures::select::{select, select4};
+use embassy_futures::select::select4;
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
-use embassy_time::{Duration, Instant, Timer};
 
-use openthread::{Channels, OpenThread, OtError, Radio};
-
-use rs_matter::utils::rand::Rand;
-use rs_matter::utils::sync::IfMutex;
-use rs_matter_stack::matter::error::{Error, ErrorCode};
-use rs_matter_stack::matter::tlv::OctetsOwned;
-use rs_matter_stack::matter::utils::init::{init, Init};
-use rs_matter_stack::matter::utils::select::Coalesce;
-use rs_matter_stack::mdns::MatterMdnsServices;
-use rs_matter_stack::network::{Embedding, Network};
-use rs_matter_stack::persist::{KvBlobStore, SharedKvBlobStore};
-use rs_matter_stack::rand::MatterRngCore;
-use rs_matter_stack::wireless::{
-    Controller, Gatt, GattTask, NetworkCredentials, Thread, ThreadData, ThreadId, ThreadScanResult,
-    Wireless, WirelessCoex, WirelessCoexTask, WirelessData, WirelessTask,
-};
+use openthread::{OpenThread, Radio};
 
 use crate::ble::{ControllerRef, TroubleBtpGattContext, TroubleBtpGattPeripheral};
-use crate::fmt::Bytes;
-use crate::ot::OtPersist;
+use crate::matter::data_model::networks::wireless::Thread;
+use crate::matter::error::Error;
+use crate::matter::utils::init::{init, Init};
+use crate::matter::utils::rand::Rand;
+use crate::matter::utils::select::Coalesce;
+use crate::matter::utils::sync::IfMutex;
+use crate::ot::{to_matter_err, OtNetCtl, OtPersist};
 use crate::ot::{OtMatterResources, OtMdns, OtNetif};
+use crate::stack::mdns::MatterMdnsServices;
+use crate::stack::network::{Embedding, Network};
+use crate::stack::persist::{KvBlobStore, SharedKvBlobStore};
+use crate::stack::rand::MatterRngCore;
+use crate::stack::wireless::{self, Gatt, GattTask};
 
-use super::{BleDriver, BleDriverTask, EmbassyWirelessMatterStack};
+use super::{BleDriver, BleDriverTask, BleDriverTaskImpl, EmbassyWirelessMatterStack};
 
 /// A type alias for an Embassy Matter stack running over Thread (and BLE, during commissioning).
+///
+/// The difference between this and the `ThreadMatterStack` is that all resources necessary for the
+/// operation of `openthread` as well as the BLE controller and pre-allocated inside the stack.
 pub type EmbassyThreadMatterStack<'a, E = ()> =
     EmbassyWirelessMatterStack<'a, Thread, OtNetContext, E>;
 
@@ -56,7 +53,7 @@ where
 /// as well as to the BLE controller to perform its work
 pub trait ThreadCoexDriverTask {
     /// Run the task with the given Thread radio and BLE controller
-    async fn run<R, B>(&mut self, radio: R, ble_controller: B) -> Result<(), Error>
+    async fn run<R, B>(&mut self, radio: R, ble_ctl: B) -> Result<(), Error>
     where
         R: Radio,
         B: trouble_host::Controller;
@@ -66,12 +63,12 @@ impl<T> ThreadCoexDriverTask for &mut T
 where
     T: ThreadCoexDriverTask,
 {
-    async fn run<R, B>(&mut self, radio: R, ble_controller: B) -> Result<(), Error>
+    async fn run<R, B>(&mut self, radio: R, ble_ctl: B) -> Result<(), Error>
     where
         R: Radio,
         B: trouble_host::Controller,
     {
-        (*self).run(radio, ble_controller).await
+        (*self).run(radio, ble_ctl).await
     }
 }
 
@@ -115,8 +112,8 @@ where
     }
 }
 
-/// A Thread radio provider that uses a pre-existing, already created Thread radio,
-/// rather than creating it when the Matter stack needs it.
+/// A Thread radio provider that uses a pre-existing, already created Thread radio
+/// as well as an already created BLE controller rather than creating these when the Matter stack needs them.
 pub struct PreexistingThreadDriver<R, B>(R, B);
 
 impl<R, B> PreexistingThreadDriver<R, B> {
@@ -223,85 +220,15 @@ where
     }
 }
 
-impl<T, S> Wireless for EmbassyThread<'_, T, S>
+impl<T, S> wireless::Thread for EmbassyThread<'_, T, S>
 where
     T: ThreadDriver,
     S: KvBlobStore,
 {
-    type Data = ThreadData;
-
     async fn run<A>(&mut self, task: A) -> Result<(), Error>
     where
-        A: WirelessTask<Data = Self::Data>,
+        A: wireless::ThreadTask,
     {
-        fn to_matter_err(_err: OtError) -> Error {
-            Error::new(ErrorCode::NoNetworkInterface)
-        }
-
-        struct ThreadDriverTaskImpl<'a, A, S> {
-            mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
-            ieee_eui64: [u8; 8],
-            rand: Rand,
-            store: &'a SharedKvBlobStore<'a, S>,
-            context: &'a OtNetContext,
-            task: A,
-        }
-
-        impl<A, S> ThreadDriverTask for ThreadDriverTaskImpl<'_, A, S>
-        where
-            A: WirelessTask<Data = ThreadData>,
-            S: KvBlobStore,
-        {
-            async fn run<R>(&mut self, radio: R) -> Result<(), Error>
-            where
-                R: Radio,
-            {
-                let mut rng = MatterRngCore::new(self.rand);
-                let mut resources = self.context.resources.lock().await;
-                let resources = &mut *resources;
-
-                let persister = OtPersist::new(&mut resources.settings_buf, self.store);
-                persister.load().await?;
-
-                let mut settings = persister.settings();
-
-                let ot = OpenThread::new_with_udp_srp(
-                    self.ieee_eui64,
-                    &mut rng,
-                    &mut settings,
-                    &mut resources.ot,
-                    &mut resources.udp,
-                    &mut resources.srp,
-                )
-                .map_err(to_matter_err)?;
-
-                let controller = OtController(ot.clone());
-                let netif = OtNetif::new(ot.clone());
-                let mdns = OtMdns::new(ot.clone(), self.mdns_services).map_err(to_matter_err)?;
-
-                let mut main = pin!(self.task.run(netif, ot.clone(), controller));
-                let mut radio = pin!(async {
-                    ot.run(radio).await;
-                    #[allow(unreachable_code)]
-                    Ok(())
-                });
-                let mut mdns = pin!(async { mdns.run().await.map_err(to_matter_err) });
-                let mut persist = pin!(persister.run());
-                ot.enable_ipv6(true).map_err(to_matter_err)?;
-                ot.srp_autostart().map_err(to_matter_err)?;
-
-                let result = select4(&mut main, &mut radio, &mut mdns, &mut persist)
-                    .coalesce()
-                    .await;
-
-                let _ = ot.enable_thread(false);
-                let _ = ot.srp_stop();
-                let _ = ot.enable_ipv6(false);
-
-                result
-            }
-        }
-
         self.driver
             .run(ThreadDriverTaskImpl {
                 mdns_services: self.mdns_services,
@@ -315,90 +242,15 @@ where
     }
 }
 
-impl<T, S> WirelessCoex for EmbassyThread<'_, T, S>
+impl<T, S> wireless::ThreadCoex for EmbassyThread<'_, T, S>
 where
     T: ThreadCoexDriver,
     S: KvBlobStore,
 {
-    type Data = ThreadData;
-
     async fn run<A>(&mut self, task: A) -> Result<(), Error>
     where
-        A: WirelessCoexTask<Data = Self::Data>,
+        A: wireless::ThreadCoexTask,
     {
-        fn to_matter_err(_err: OtError) -> Error {
-            Error::new(ErrorCode::NoNetworkInterface)
-        }
-
-        struct ThreadCoexDriverTaskImpl<'a, A, S> {
-            mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
-            ieee_eui64: [u8; 8],
-            rand: Rand,
-            store: &'a SharedKvBlobStore<'a, S>,
-            context: &'a OtNetContext,
-            ble_context: &'a TroubleBtpGattContext<CriticalSectionRawMutex>,
-            task: A,
-        }
-
-        impl<A, S> ThreadCoexDriverTask for ThreadCoexDriverTaskImpl<'_, A, S>
-        where
-            A: WirelessCoexTask<Data = ThreadData>,
-            S: KvBlobStore,
-        {
-            async fn run<R, B>(&mut self, radio: R, ble_controller: B) -> Result<(), Error>
-            where
-                R: Radio,
-                B: trouble_host::Controller,
-            {
-                let mut rng = MatterRngCore::new(self.rand);
-                let mut resources = self.context.resources.lock().await;
-                let resources = &mut *resources;
-
-                let persister = OtPersist::new(&mut resources.settings_buf, self.store);
-                persister.load().await?;
-
-                let mut settings = persister.settings();
-
-                let ot = OpenThread::new_with_udp_srp(
-                    self.ieee_eui64,
-                    &mut rng,
-                    &mut settings,
-                    &mut resources.ot,
-                    &mut resources.udp,
-                    &mut resources.srp,
-                )
-                .map_err(to_matter_err)?;
-
-                let controller = OtController(ot.clone());
-                let netif = OtNetif::new(ot.clone());
-                let mdns = OtMdns::new(ot.clone(), self.mdns_services).map_err(to_matter_err)?;
-
-                let peripheral =
-                    TroubleBtpGattPeripheral::new(ble_controller, self.rand, self.ble_context);
-
-                let mut main = pin!(self.task.run(netif, ot.clone(), controller, peripheral));
-                let mut radio = pin!(async {
-                    ot.run(radio).await;
-                    #[allow(unreachable_code)]
-                    Ok(())
-                });
-                let mut mdns = pin!(async { mdns.run().await.map_err(to_matter_err) });
-                let mut persist = pin!(persister.run());
-                ot.enable_ipv6(true).map_err(to_matter_err)?;
-                ot.srp_autostart().map_err(to_matter_err)?;
-
-                let result = select4(&mut main, &mut radio, &mut mdns, &mut persist)
-                    .coalesce()
-                    .await;
-
-                let _ = ot.enable_thread(false);
-                let _ = ot.srp_stop();
-                let _ = ot.enable_ipv6(false);
-
-                result
-            }
-        }
-
         self.driver
             .run(ThreadCoexDriverTaskImpl {
                 mdns_services: self.mdns_services,
@@ -422,26 +274,6 @@ where
     where
         A: GattTask,
     {
-        struct BleDriverTaskImpl<'a, A> {
-            task: A,
-            rand: Rand,
-            context: &'a TroubleBtpGattContext<CriticalSectionRawMutex>,
-        }
-
-        impl<A> BleDriverTask for BleDriverTaskImpl<'_, A>
-        where
-            A: GattTask,
-        {
-            async fn run<C>(&mut self, controller: C) -> Result<(), Error>
-            where
-                C: trouble_host::Controller,
-            {
-                let peripheral = TroubleBtpGattPeripheral::new(controller, self.rand, self.context);
-
-                self.task.run(&peripheral).await
-            }
-        }
-
         self.driver
             .run(BleDriverTaskImpl {
                 task,
@@ -487,134 +319,9 @@ impl Embedding for OtNetContext {
     }
 }
 
-struct OtController<'a>(OpenThread<'a>);
-
-impl Controller for OtController<'_> {
-    type Data = ThreadData;
-
-    async fn scan<F>(
-        &mut self,
-        network_id: Option<
-            &<<Self::Data as WirelessData>::NetworkCredentials as NetworkCredentials>::NetworkId,
-        >,
-        mut callback: F,
-    ) -> Result<(), Error>
-    where
-        F: FnMut(Option<&<Self::Data as WirelessData>::ScanResult>) -> Result<(), Error>,
-    {
-        const SCAN_DURATION_MILLIS: u16 = 2000;
-
-        self.0
-            .scan(Channels::all(), SCAN_DURATION_MILLIS, |scan_result| {
-                if scan_result
-                    .map(|sr| {
-                        network_id
-                            .map(|id| id.0.vec.as_slice() == sr.extended_pan_id.to_be_bytes())
-                            .unwrap_or(true)
-                    })
-                    .unwrap_or(true)
-                {
-                    let _ = callback(
-                        scan_result
-                            .map(|scan_result| ThreadScanResult {
-                                pan_id: scan_result.pan_id,
-                                extended_pan_id: scan_result.extended_pan_id,
-                                network_name: scan_result
-                                    .network_name
-                                    .try_into()
-                                    .unwrap_or(heapless::String::new()),
-                                channel: scan_result.channel as _,
-                                version: scan_result.version,
-                                // TODO: Should be Vec<u8, 8>
-                                extended_address:
-                                    rs_matter_stack::matter::utils::storage::Vec::from_slice(
-                                        &scan_result.ext_address.to_be_bytes(),
-                                    )
-                                    .unwrap_or(rs_matter_stack::matter::utils::storage::Vec::new()),
-                                rssi: scan_result.rssi,
-                                lqi: scan_result.lqi,
-                            })
-                            .as_ref(),
-                    );
-                }
-            })
-            .await
-            .map_err(to_matter_err)
-    }
-
-    async fn connect(
-        &mut self,
-        creds: &<Self::Data as WirelessData>::NetworkCredentials,
-    ) -> Result<(), Error> {
-        const TIMEOUT_SECS: u64 = 20;
-
-        let _ = self.0.enable_thread(false);
-
-        // NOTE: Printing the dataset is a security issue, but we do it for now for debugging purposes
-        // (i.e. for running some of the pseudo-eth examples the user needs the Thread network dataset)
-        info!(
-            "Connecting to Thread network, dataset: {:x}",
-            Bytes(&creds.op_dataset)
-        );
-
-        self.0
-            .set_active_dataset_tlv(&creds.op_dataset)
-            .map_err(to_matter_err)?;
-
-        self.0.enable_thread(true).map_err(to_matter_err)?;
-
-        let now = Instant::now();
-
-        while !self.0.net_status().role.is_connected() {
-            if now.elapsed().as_secs() > TIMEOUT_SECS {
-                let _ = self.0.enable_thread(false);
-
-                return Err(ErrorCode::NoNetworkInterface.into());
-            }
-
-            select(self.0.wait_changed(), Timer::after(Duration::from_secs(1))).await;
-        }
-
-        Ok(())
-    }
-
-    async fn connected_network(
-        &mut self,
-    ) -> Result<
-        Option<<<Self::Data as WirelessData>::NetworkCredentials as NetworkCredentials>::NetworkId>,
-        Error,
-    > {
-        let status = self.0.net_status();
-
-        Ok(status
-            .role
-            .is_connected()
-            .then_some(status.ext_pan_id)
-            .flatten()
-            .map(|id| {
-                ThreadId(OctetsOwned {
-                    vec: unwrap!(rs_matter_stack::matter::utils::storage::Vec::from_slice(
-                        &u64::to_be_bytes(id),
-                    )),
-                })
-            }))
-    }
-
-    async fn stats(&mut self) -> Result<<Self::Data as WirelessData>::Stats, Error> {
-        Ok(())
-    }
-}
-
-fn to_matter_err(err: OtError) -> Error {
-    error!("OpenThread error: {:?}", err);
-
-    ErrorCode::NoNetworkInterface.into()
-}
-
 #[cfg(feature = "esp")]
 pub mod esp_thread {
     use bt_hci::controller::ExternalController;
-    use esp_hal::peripheral::{Peripheral, PeripheralRef};
 
     use esp_wifi::ble::controller::BleConnector;
     use openthread::esp::EspRadio;
@@ -626,8 +333,8 @@ pub mod esp_thread {
     /// A `ThreadRadio` implementation for the ESP32 family of chips.
     pub struct EspThreadDriver<'a, 'd> {
         controller: &'a esp_wifi::EspWifiController<'d>,
-        _radio_peripheral: PeripheralRef<'d, esp_hal::peripherals::IEEE802154>,
-        bt_peripheral: PeripheralRef<'d, esp_hal::peripherals::BT>,
+        radio_peripheral: esp_hal::peripherals::IEEE802154<'d>,
+        bt_peripheral: esp_hal::peripherals::BT<'d>,
     }
 
     impl<'a, 'd> EspThreadDriver<'a, 'd> {
@@ -637,13 +344,13 @@ pub mod esp_thread {
         /// - `peripheral` - The Thread radio peripheral instance.
         pub fn new(
             controller: &'a esp_wifi::EspWifiController<'d>,
-            radio_peripheral: impl Peripheral<P = esp_hal::peripherals::IEEE802154> + 'd,
-            bt_peripheral: impl Peripheral<P = esp_hal::peripherals::BT> + 'd,
+            radio_peripheral: esp_hal::peripherals::IEEE802154<'d>,
+            bt_peripheral: esp_hal::peripherals::BT<'d>,
         ) -> Self {
             Self {
                 controller,
-                _radio_peripheral: radio_peripheral.into_ref(),
-                bt_peripheral: bt_peripheral.into_ref(),
+                radio_peripheral,
+                bt_peripheral,
             }
         }
     }
@@ -654,9 +361,8 @@ pub mod esp_thread {
             A: super::ThreadDriverTask,
         {
             // See https://github.com/esp-rs/esp-hal/issues/3238
-            //EspRadio::new(openthread::esp::Ieee802154::new(&mut self.radio_peripheral, &mut self.radio_clk_peripheral))
             let radio = EspRadio::new(openthread::esp::Ieee802154::new(
-                unsafe { esp_hal::peripherals::IEEE802154::steal() },
+                self.radio_peripheral.reborrow(),
                 unsafe { esp_hal::peripherals::RADIO_CLK::steal() },
             ));
 
@@ -670,15 +376,14 @@ pub mod esp_thread {
             A: super::ThreadCoexDriverTask,
         {
             // See https://github.com/esp-rs/esp-hal/issues/3238
-            //EspRadio::new(openthread::esp::Ieee802154::new(&mut self.radio_peripheral, &mut self.radio_clk_peripheral))
             let radio = EspRadio::new(openthread::esp::Ieee802154::new(
-                unsafe { esp_hal::peripherals::IEEE802154::steal() },
+                self.radio_peripheral.reborrow(),
                 unsafe { esp_hal::peripherals::RADIO_CLK::steal() },
             ));
 
             let ble_controller = ExternalController::<_, SLOTS>::new(BleConnector::new(
                 self.controller,
-                &mut self.bt_peripheral,
+                self.bt_peripheral.reborrow(),
             ));
 
             task.run(radio, ble_controller).await
@@ -692,7 +397,7 @@ pub mod esp_thread {
         {
             let ble_controller = ExternalController::<_, SLOTS>::new(BleConnector::new(
                 self.controller,
-                &mut self.bt_peripheral,
+                self.bt_peripheral.reborrow(),
             ));
 
             task.run(ble_controller).await
@@ -709,13 +414,12 @@ pub mod nrf {
     use embassy_nrf::interrupt;
     use embassy_nrf::interrupt::typelevel::Interrupt;
     use embassy_nrf::interrupt::typelevel::{Binding, Handler};
-    use embassy_nrf::into_ref;
     use embassy_nrf::peripherals::{
         PPI_CH17, PPI_CH18, PPI_CH19, PPI_CH20, PPI_CH21, PPI_CH22, PPI_CH23, PPI_CH24, PPI_CH25,
         PPI_CH26, PPI_CH27, PPI_CH28, PPI_CH29, PPI_CH30, PPI_CH31, RADIO, RTC0, TEMP, TIMER0,
     };
     use embassy_nrf::radio::InterruptHandler;
-    use embassy_nrf::{Peripheral, PeripheralRef};
+    use embassy_nrf::Peri;
 
     use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 
@@ -854,18 +558,15 @@ pub mod nrf {
     /// Needs to run in a high-prio execution context
     pub struct NrfThreadRadioRunner<'a, 'd> {
         runner: PhyRadioRunner<'a>,
-        radio_peripheral: PeripheralRef<'d, RADIO>,
+        radio_peripheral: Peri<'d, RADIO>,
     }
 
     impl<'a, 'd> NrfThreadRadioRunner<'a, 'd> {
         /// Create a new instance of the `NrfThreadRadioRunner` type.
-        fn new(
-            runner: PhyRadioRunner<'a>,
-            radio_peripheral: impl Peripheral<P = RADIO> + 'd,
-        ) -> Self {
+        fn new(runner: PhyRadioRunner<'a>, radio_peripheral: Peri<'d, RADIO>) -> Self {
             Self {
                 runner,
-                radio_peripheral: radio_peripheral.into_ref(),
+                radio_peripheral,
             }
         }
 
@@ -880,7 +581,7 @@ pub mod nrf {
                     info!("Thread radio started");
 
                     let radio = NrfRadio::new(embassy_nrf::radio::ieee802154::Radio::new(
-                        &mut self.radio_peripheral,
+                        self.radio_peripheral.reborrow(),
                         NrfThreadRadioInterrupts,
                     ));
 
@@ -900,24 +601,24 @@ pub mod nrf {
     /// A `ThreadDriver` implementation for the NRF52 family of chips.
     pub struct NrfThreadDriver<'d> {
         proxy: ProxyRadio<'d>,
-        rtc0: PeripheralRef<'d, RTC0>,
-        timer0: PeripheralRef<'d, TIMER0>,
-        temp: PeripheralRef<'d, TEMP>,
-        ppi_ch17: PeripheralRef<'d, PPI_CH17>,
-        ppi_ch18: PeripheralRef<'d, PPI_CH18>,
-        ppi_ch19: PeripheralRef<'d, PPI_CH19>,
-        ppi_ch20: PeripheralRef<'d, PPI_CH20>,
-        ppi_ch21: PeripheralRef<'d, PPI_CH21>,
-        ppi_ch22: PeripheralRef<'d, PPI_CH22>,
-        ppi_ch23: PeripheralRef<'d, PPI_CH23>,
-        ppi_ch24: PeripheralRef<'d, PPI_CH24>,
-        ppi_ch25: PeripheralRef<'d, PPI_CH25>,
-        ppi_ch26: PeripheralRef<'d, PPI_CH26>,
-        ppi_ch27: PeripheralRef<'d, PPI_CH27>,
-        ppi_ch28: PeripheralRef<'d, PPI_CH28>,
-        ppi_ch29: PeripheralRef<'d, PPI_CH29>,
-        ppi_ch30: PeripheralRef<'d, PPI_CH30>,
-        ppi_ch31: PeripheralRef<'d, PPI_CH31>,
+        rtc0: Peri<'d, RTC0>,
+        timer0: Peri<'d, TIMER0>,
+        temp: Peri<'d, TEMP>,
+        ppi_ch17: Peri<'d, PPI_CH17>,
+        ppi_ch18: Peri<'d, PPI_CH18>,
+        ppi_ch19: Peri<'d, PPI_CH19>,
+        ppi_ch20: Peri<'d, PPI_CH20>,
+        ppi_ch21: Peri<'d, PPI_CH21>,
+        ppi_ch22: Peri<'d, PPI_CH22>,
+        ppi_ch23: Peri<'d, PPI_CH23>,
+        ppi_ch24: Peri<'d, PPI_CH24>,
+        ppi_ch25: Peri<'d, PPI_CH25>,
+        ppi_ch26: Peri<'d, PPI_CH26>,
+        ppi_ch27: Peri<'d, PPI_CH27>,
+        ppi_ch28: Peri<'d, PPI_CH28>,
+        ppi_ch29: Peri<'d, PPI_CH29>,
+        ppi_ch30: Peri<'d, PPI_CH30>,
+        ppi_ch31: Peri<'d, PPI_CH31>,
         rand: Rand,
     }
 
@@ -950,25 +651,25 @@ pub mod nrf {
         #[allow(clippy::too_many_arguments)]
         pub fn new<T, I>(
             resources: &'d mut ProxyRadioResources,
-            radio: impl Peripheral<P = RADIO> + 'd,
-            rtc0: impl Peripheral<P = RTC0> + 'd,
-            timer0: impl Peripheral<P = TIMER0> + 'd,
-            temp: impl Peripheral<P = TEMP> + 'd,
-            ppi_ch17: impl Peripheral<P = PPI_CH17> + 'd,
-            ppi_ch18: impl Peripheral<P = PPI_CH18> + 'd,
-            ppi_ch19: impl Peripheral<P = PPI_CH19> + 'd,
-            ppi_ch20: impl Peripheral<P = PPI_CH20> + 'd,
-            ppi_ch21: impl Peripheral<P = PPI_CH21> + 'd,
-            ppi_ch22: impl Peripheral<P = PPI_CH22> + 'd,
-            ppi_ch23: impl Peripheral<P = PPI_CH23> + 'd,
-            ppi_ch24: impl Peripheral<P = PPI_CH24> + 'd,
-            ppi_ch25: impl Peripheral<P = PPI_CH25> + 'd,
-            ppi_ch26: impl Peripheral<P = PPI_CH26> + 'd,
-            ppi_ch27: impl Peripheral<P = PPI_CH27> + 'd,
-            ppi_ch28: impl Peripheral<P = PPI_CH28> + 'd,
-            ppi_ch29: impl Peripheral<P = PPI_CH29> + 'd,
-            ppi_ch30: impl Peripheral<P = PPI_CH30> + 'd,
-            ppi_ch31: impl Peripheral<P = PPI_CH31> + 'd,
+            radio: Peri<'d, RADIO>,
+            rtc0: Peri<'d, RTC0>,
+            timer0: Peri<'d, TIMER0>,
+            temp: Peri<'d, TEMP>,
+            ppi_ch17: Peri<'d, PPI_CH17>,
+            ppi_ch18: Peri<'d, PPI_CH18>,
+            ppi_ch19: Peri<'d, PPI_CH19>,
+            ppi_ch20: Peri<'d, PPI_CH20>,
+            ppi_ch21: Peri<'d, PPI_CH21>,
+            ppi_ch22: Peri<'d, PPI_CH22>,
+            ppi_ch23: Peri<'d, PPI_CH23>,
+            ppi_ch24: Peri<'d, PPI_CH24>,
+            ppi_ch25: Peri<'d, PPI_CH25>,
+            ppi_ch26: Peri<'d, PPI_CH26>,
+            ppi_ch27: Peri<'d, PPI_CH27>,
+            ppi_ch28: Peri<'d, PPI_CH28>,
+            ppi_ch29: Peri<'d, PPI_CH29>,
+            ppi_ch30: Peri<'d, PPI_CH30>,
+            ppi_ch31: Peri<'d, PPI_CH31>,
             rand: Rand,
             _irqs: I,
         ) -> (Self, NrfThreadRadioRunner<'d, 'd>)
@@ -995,12 +696,6 @@ pub mod nrf {
             let (proxy, proxy_runner) = ProxyRadio::new(caps, resources);
 
             let runner = NrfThreadRadioRunner::new(proxy_runner, radio);
-
-            into_ref!(
-                rtc0, timer0, temp, ppi_ch17, ppi_ch18, ppi_ch19, ppi_ch20, ppi_ch21, ppi_ch22,
-                ppi_ch23, ppi_ch24, ppi_ch25, ppi_ch26, ppi_ch27, ppi_ch28, ppi_ch29, ppi_ch30,
-                ppi_ch31
-            );
 
             (
                 Self {
@@ -1057,27 +752,27 @@ pub mod nrf {
             NRF_THREAD_RADIO_STATE.wait_enabled_state(false).await;
 
             let mpsl_p = nrf_sdc::mpsl::Peripherals::new(
-                &mut self.rtc0,
-                &mut self.timer0,
-                &mut self.temp,
-                &mut self.ppi_ch19,
-                &mut self.ppi_ch30,
-                &mut self.ppi_ch31,
+                self.rtc0.reborrow(),
+                self.timer0.reborrow(),
+                self.temp.reborrow(),
+                self.ppi_ch19.reborrow(),
+                self.ppi_ch30.reborrow(),
+                self.ppi_ch31.reborrow(),
             );
 
             let sdc_p = nrf_sdc::Peripherals::new(
-                &mut self.ppi_ch17,
-                &mut self.ppi_ch18,
-                &mut self.ppi_ch20,
-                &mut self.ppi_ch21,
-                &mut self.ppi_ch22,
-                &mut self.ppi_ch23,
-                &mut self.ppi_ch24,
-                &mut self.ppi_ch25,
-                &mut self.ppi_ch26,
-                &mut self.ppi_ch27,
-                &mut self.ppi_ch28,
-                &mut self.ppi_ch29,
+                self.ppi_ch17.reborrow(),
+                self.ppi_ch18.reborrow(),
+                self.ppi_ch20.reborrow(),
+                self.ppi_ch21.reborrow(),
+                self.ppi_ch22.reborrow(),
+                self.ppi_ch23.reborrow(),
+                self.ppi_ch24.reborrow(),
+                self.ppi_ch25.reborrow(),
+                self.ppi_ch26.reborrow(),
+                self.ppi_ch27.reborrow(),
+                self.ppi_ch28.reborrow(),
+                self.ppi_ch29.reborrow(),
             );
 
             let lfclk_cfg = nrf_sdc::mpsl::raw::mpsl_clock_lfclk_cfg_t {
@@ -1109,7 +804,7 @@ pub mod nrf {
                 .map_err(to_matter_err)?
                 .peripheral_count(1)
                 .map_err(to_matter_err)?
-                .buffer_cfg(MAX_MTU_SIZE as u8, MAX_MTU_SIZE as u8, L2CAP_TXQ, L2CAP_RXQ)
+                .buffer_cfg(MAX_MTU_SIZE as _, MAX_MTU_SIZE as _, L2CAP_TXQ, L2CAP_RXQ)
                 .map_err(to_matter_err)?
                 .build(sdc_p, &mut rng, &mpsl, &mut sdc_mem)
                 .map_err(to_matter_err)?;
@@ -1148,5 +843,137 @@ pub mod nrf {
 
     fn to_matter_err<E>(_: E) -> Error {
         Error::new(ErrorCode::BtpError)
+    }
+}
+
+struct ThreadDriverTaskImpl<'a, A, S> {
+    mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
+    ieee_eui64: [u8; 8],
+    rand: Rand,
+    store: &'a SharedKvBlobStore<'a, S>,
+    context: &'a OtNetContext,
+    task: A,
+}
+
+impl<A, S> ThreadDriverTask for ThreadDriverTaskImpl<'_, A, S>
+where
+    A: wireless::ThreadTask,
+    S: KvBlobStore,
+{
+    async fn run<R>(&mut self, radio: R) -> Result<(), Error>
+    where
+        R: Radio,
+    {
+        let mut rng = MatterRngCore::new(self.rand);
+        let mut resources = self.context.resources.lock().await;
+        let resources = &mut *resources;
+
+        let persister = OtPersist::new(&mut resources.settings_buf, self.store);
+        persister.load().await?;
+
+        let mut settings = persister.settings();
+
+        let ot = OpenThread::new_with_udp_srp(
+            self.ieee_eui64,
+            &mut rng,
+            &mut settings,
+            &mut resources.ot,
+            &mut resources.udp,
+            &mut resources.srp,
+        )
+        .map_err(to_matter_err)?;
+
+        let net_ctl = OtNetCtl::new(ot.clone());
+        let netif = OtNetif::new(ot.clone());
+        let mdns = OtMdns::new(ot.clone(), self.mdns_services).map_err(to_matter_err)?;
+
+        let mut main = pin!(self.task.run(ot.clone(), netif, net_ctl));
+        let mut radio = pin!(async {
+            ot.run(radio).await;
+            #[allow(unreachable_code)]
+            Ok(())
+        });
+        let mut mdns = pin!(async { mdns.run().await.map_err(to_matter_err) });
+        let mut persist = pin!(persister.run());
+        ot.enable_ipv6(true).map_err(to_matter_err)?;
+        ot.srp_autostart().map_err(to_matter_err)?;
+
+        let result = select4(&mut main, &mut radio, &mut mdns, &mut persist)
+            .coalesce()
+            .await;
+
+        let _ = ot.enable_thread(false);
+        let _ = ot.srp_stop();
+        let _ = ot.enable_ipv6(false);
+
+        result
+    }
+}
+
+struct ThreadCoexDriverTaskImpl<'a, A, S> {
+    mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
+    ieee_eui64: [u8; 8],
+    rand: Rand,
+    store: &'a SharedKvBlobStore<'a, S>,
+    context: &'a OtNetContext,
+    ble_context: &'a TroubleBtpGattContext<CriticalSectionRawMutex>,
+    task: A,
+}
+
+impl<A, S> ThreadCoexDriverTask for ThreadCoexDriverTaskImpl<'_, A, S>
+where
+    A: wireless::ThreadCoexTask,
+    S: KvBlobStore,
+{
+    async fn run<R, B>(&mut self, radio: R, ble_ctl: B) -> Result<(), Error>
+    where
+        R: Radio,
+        B: trouble_host::Controller,
+    {
+        let mut rng = MatterRngCore::new(self.rand);
+        let mut resources = self.context.resources.lock().await;
+        let resources = &mut *resources;
+
+        let persister = OtPersist::new(&mut resources.settings_buf, self.store);
+        persister.load().await?;
+
+        let mut settings = persister.settings();
+
+        let ot = OpenThread::new_with_udp_srp(
+            self.ieee_eui64,
+            &mut rng,
+            &mut settings,
+            &mut resources.ot,
+            &mut resources.udp,
+            &mut resources.srp,
+        )
+        .map_err(to_matter_err)?;
+
+        let net_ctl = OtNetCtl::new(ot.clone());
+        let netif = OtNetif::new(ot.clone());
+        let mdns = OtMdns::new(ot.clone(), self.mdns_services).map_err(to_matter_err)?;
+
+        let peripheral = TroubleBtpGattPeripheral::new(ble_ctl, self.rand, self.ble_context);
+
+        let mut main = pin!(self.task.run(ot.clone(), netif, net_ctl, peripheral));
+        let mut radio = pin!(async {
+            ot.run(radio).await;
+            #[allow(unreachable_code)]
+            Ok(())
+        });
+        let mut mdns = pin!(async { mdns.run().await.map_err(to_matter_err) });
+        let mut persist = pin!(persister.run());
+        ot.enable_ipv6(true).map_err(to_matter_err)?;
+        ot.srp_autostart().map_err(to_matter_err)?;
+
+        let result = select4(&mut main, &mut radio, &mut mdns, &mut persist)
+            .coalesce()
+            .await;
+
+        let _ = ot.enable_thread(false);
+        let _ = ot.srp_stop();
+        let _ = ot.enable_ipv6(false);
+
+        result
     }
 }

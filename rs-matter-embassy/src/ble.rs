@@ -44,7 +44,8 @@ pub(crate) const MAX_MTU_SIZE: usize = 131;
 const MAX_CHANNELS: usize = 2;
 const ADV_SETS: usize = 1;
 
-pub type GPHostResources = HostResources<MAX_CONNECTIONS, MAX_CHANNELS, MAX_MTU_SIZE, ADV_SETS>;
+pub type GPHostResources =
+    HostResources<DefaultPacketPool, MAX_CONNECTIONS, MAX_CHANNELS, ADV_SETS>;
 
 type External = [u8; 0];
 
@@ -157,7 +158,7 @@ where
 {
     // TODO: Ideally this should be the controller itself, but this is not possible
     // until `bt-hci` is updated with `impl<C: Controller>` Controller for &C {}`
-    controller: IfMutex<M, C>,
+    ble_ctl: IfMutex<M, C>,
     rand: Rand,
     context: &'a TroubleBtpGattContext<M>,
 }
@@ -171,10 +172,9 @@ where
     ///
     /// Creation might fail if the GATT context cannot be reset, so user should ensure
     /// that there are no other GATT peripherals running before calling this function.
-    // TODO: change `provider` to `controller` once https://github.com/embassy-rs/bt-hci/issues/32 is resolved
-    pub const fn new(controller: C, rand: Rand, context: &'a TroubleBtpGattContext<M>) -> Self {
+    pub const fn new(ble_ctl: C, rand: Rand, context: &'a TroubleBtpGattContext<M>) -> Self {
         Self {
-            controller: IfMutex::new(controller),
+            ble_ctl: IfMutex::new(ble_ctl),
             rand,
             context,
         }
@@ -192,10 +192,10 @@ where
     {
         info!("Starting advertising and GATT service");
 
-        let controller = self.controller.lock().await;
+        let ble_ctl = self.ble_ctl.lock().await;
         let mut resources = self.context.resources.lock().await;
 
-        let controller = ControllerRef::new(&*controller);
+        let controller = ControllerRef::new(&*ble_ctl);
 
         let mut address = [0; 6];
         (self.rand)(&mut address);
@@ -222,6 +222,8 @@ where
             loop {
                 match Self::advertise(service_name, service_adv_data, &mut peripheral).await {
                     Ok(conn) => {
+                        let conn = conn.with_attribute_server(&server).unwrap();
+
                         let events =
                             Self::handle_events(&server, &conn, &self.context.ind, &mut callback);
                         let indications =
@@ -240,9 +242,10 @@ where
         Ok(())
     }
 
-    async fn run_ble<CC>(mut runner: Runner<'_, CC>)
+    async fn run_ble<CC, P>(mut runner: Runner<'_, CC, P>)
     where
         CC: Controller,
+        P: PacketPool,
     {
         loop {
             if let Err(e) = runner.run().await {
@@ -253,7 +256,7 @@ where
 
     async fn handle_indications(
         server: &Server<'_>,
-        conn: &Connection<'_>,
+        conn: &GattConnection<'_, '_, DefaultPacketPool>,
         ind: &IfMutex<M, IndBuffer>,
     ) -> Result<(), trouble_host::Error> {
         loop {
@@ -264,7 +267,7 @@ where
             ind.in_flight = true;
 
             GattData::send_unsolicited(
-                conn,
+                conn.raw(),
                 AttUns::Indicate {
                     handle: server.matter_service.c2.handle,
                     data: &ind.data,
@@ -282,7 +285,7 @@ where
     /// This is how we interact with read and write requests.
     async fn handle_events<F>(
         server: &Server<'_>,
-        conn: &Connection<'_>,
+        conn: &GattConnection<'_, '_, DefaultPacketPool>,
         ind: &IfMutex<M, IndBuffer>,
         mut callback: F,
     ) -> Result<(), trouble_host::Error>
@@ -296,18 +299,18 @@ where
 
         loop {
             match conn.next().await {
-                ConnectionEvent::Disconnected { reason } => {
+                GattConnectionEvent::Disconnected { reason } => {
                     info!("GATT: Disconnect {:?}", reason);
 
                     callback(GattPeripheralEvent::NotifyUnsubscribed(to_bt_addr(
-                        &conn.peer_address(),
+                        &conn.raw().peer_address(),
                     )));
                     break;
                 }
-                ConnectionEvent::Gatt { data } => {
-                    let incoming = data.incoming();
+                GattConnectionEvent::Gatt { event } => {
+                    let mut write_reply = false;
 
-                    match incoming {
+                    match event.payload().incoming() {
                         AttClient::Request(AttReq::Write {
                             handle,
                             data: bytes,
@@ -317,18 +320,16 @@ where
                                     "GATT: C1 Write {} len {} / MTU {}",
                                     Bytes(bytes),
                                     bytes.len(),
-                                    conn.att_mtu()
+                                    conn.raw().att_mtu()
                                 );
 
                                 callback(GattPeripheralEvent::Write {
-                                    address: to_bt_addr(&conn.peer_address()),
+                                    address: to_bt_addr(&conn.raw().peer_address()),
                                     data: bytes,
-                                    gatt_mtu: Some(conn.att_mtu()),
+                                    gatt_mtu: Some(conn.raw().att_mtu()),
                                 });
 
-                                unwrap!(data.reply(AttRsp::Write).await);
-
-                                continue;
+                                write_reply = true;
                             } else if Some(handle) == server.matter_service.c2.cccd_handle {
                                 let subscribed = bytes[0] != 0;
 
@@ -336,17 +337,15 @@ where
 
                                 if subscribed {
                                     callback(GattPeripheralEvent::NotifySubscribed(to_bt_addr(
-                                        &conn.peer_address(),
+                                        &conn.raw().peer_address(),
                                     )));
                                 } else {
                                     callback(GattPeripheralEvent::NotifyUnsubscribed(to_bt_addr(
-                                        &conn.peer_address(),
+                                        &conn.raw().peer_address(),
                                     )));
                                 }
 
-                                unwrap!(data.reply(AttRsp::Write).await);
-
-                                continue;
+                                write_reply = true;
                             }
                         }
                         AttClient::Confirmation(AttCfm::ConfirmIndication) => {
@@ -367,8 +366,17 @@ where
                         _ => (),
                     }
 
-                    if let Err(e) = data.process(&server.server).await {
-                        warn!("GATT: Error processing event: {:?}", e);
+                    if write_reply {
+                        unwrap!(event.into_payload().reply(AttRsp::Write).await);
+                    } else {
+                        match event.accept() {
+                            Ok(reply) => {
+                                reply.send().await;
+                            }
+                            Err(e) => {
+                                warn!("GATT: Error accepting event: {:?}", e);
+                            }
+                        }
                     }
                 }
                 _ => (),
@@ -381,13 +389,14 @@ where
     }
 
     /// Create an advertiser to use to connect to a BLE Central, and wait for it to connect.
-    async fn advertise<'p, CC>(
+    async fn advertise<'p, CC, P>(
         service_name: &str,
         service_adv_data: &AdvData,
-        peripheral: &mut Peripheral<'p, CC>,
-    ) -> Result<Connection<'p>, BleHostError<CC::Error>>
+        peripheral: &mut Peripheral<'p, CC, P>,
+    ) -> Result<Connection<'p, P>, BleHostError<CC::Error>>
     where
         CC: Controller,
+        P: PacketPool,
     {
         let service_adv_enc_data = service_adv_data
             .service_payload_iter()

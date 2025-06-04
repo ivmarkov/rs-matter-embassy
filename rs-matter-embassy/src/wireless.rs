@@ -2,12 +2,13 @@
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 
-use rs_matter_stack::matter::error::Error;
-use rs_matter_stack::matter::tlv::{FromTLV, ToTLV};
-use rs_matter_stack::matter::utils::init::{init, Init};
-use rs_matter_stack::network::{Embedding, Network};
-use rs_matter_stack::wireless::{WirelessBle, WirelessConfig, WirelessData};
-use rs_matter_stack::MatterStack;
+use crate::matter::data_model::networks::wireless::WirelessNetwork;
+use crate::matter::utils::rand::Rand;
+use crate::stack::matter::error::Error;
+use crate::stack::matter::utils::init::{init, Init};
+use crate::stack::network::{Embedding, Network};
+use crate::stack::wireless::{GattTask, WirelessBle};
+use crate::stack::MatterStack;
 
 use trouble_host::Controller;
 
@@ -34,6 +35,9 @@ pub mod esp {
 }
 
 /// A type alias for an Embassy Matter stack running over a wireless network (Wifi or Thread) and BLE.
+///
+/// The difference between this and `WirelessMatterStack` is that all resources necessary for the
+/// operation of the BLE controller and pre-allocated inside the stack.
 pub type EmbassyWirelessMatterStack<'a, T, N, E = ()> =
     MatterStack<'a, EmbassyWirelessBle<T, N, E>>;
 
@@ -159,18 +163,38 @@ where
     C: Controller,
 {
     pub fn new_for_stack<T, E>(
-        controller: C,
+        ble_ctl: C,
         stack: &'a crate::wireless::EmbassyWirelessMatterStack<T, E>,
     ) -> Self
     where
-        T: WirelessConfig,
-        <T::Data as WirelessData>::NetworkCredentials: Clone + for<'t> FromTLV<'t> + ToTLV,
+        T: WirelessNetwork,
         E: Embedding + 'static,
     {
         Self::new(
-            controller,
+            ble_ctl,
             stack.matter().rand(),
             stack.network().embedding().ble_context(),
         )
+    }
+}
+
+#[allow(dead_code)]
+struct BleDriverTaskImpl<'a, A> {
+    task: A,
+    rand: Rand,
+    context: &'a TroubleBtpGattContext<CriticalSectionRawMutex>,
+}
+
+impl<A> BleDriverTask for BleDriverTaskImpl<'_, A>
+where
+    A: GattTask,
+{
+    async fn run<C>(&mut self, controller: C) -> Result<(), Error>
+    where
+        C: trouble_host::Controller,
+    {
+        let peripheral = TroubleBtpGattPeripheral::new(controller, self.rand, self.context);
+
+        self.task.run(&peripheral).await
     }
 }

@@ -12,9 +12,10 @@ use embassy_net::{
 use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
 use embassy_time::{Duration, Timer};
 
-use rs_matter_stack::matter::error::Error;
-use rs_matter_stack::matter::transport::network::{MAX_RX_PACKET_SIZE, MAX_TX_PACKET_SIZE};
-use rs_matter_stack::netif::{Netif, NetifConf};
+use crate::matter::data_model::networks::NetChangeNotif;
+use crate::matter::data_model::sdm::gen_diag::{InterfaceTypeEnum, NetifDiag, NetifInfo};
+use crate::stack::matter::error::Error;
+use crate::stack::matter::transport::network::{MAX_RX_PACKET_SIZE, MAX_TX_PACKET_SIZE};
 
 /// Re-export the `edge-nal-embassy` crate
 pub use edge_nal_embassy::*;
@@ -62,39 +63,57 @@ const TIMEOUT_PERIOD_SECS: u8 = 5;
 pub struct EnetNetif<'d> {
     stack: Stack<'d>,
     up: Mutex<CriticalSectionRawMutex, Cell<bool>>,
+    netif_type: InterfaceTypeEnum,
 }
 
 impl<'d> EnetNetif<'d> {
     /// Create a new `EmbassyNetif` instance
-    pub const fn new(stack: Stack<'d>) -> Self {
+    pub const fn new(stack: Stack<'d>, netif_type: InterfaceTypeEnum) -> Self {
         Self {
             stack,
             up: Mutex::new(Cell::new(false)),
+            netif_type,
         }
     }
+}
 
-    fn get_conf(&self) -> Option<NetifConf> {
-        let v4 = self.stack.config_v4()?;
-        let v6 = self.stack.config_v6()?;
+impl NetifDiag for EnetNetif<'_> {
+    fn netifs(&self, f: &mut dyn FnMut(&NetifInfo) -> Result<(), Error>) -> Result<(), Error> {
+        let v4 = self.stack.config_v4();
+        let v6 = self.stack.config_v6();
 
-        let conf = NetifConf {
-            ipv4: v4.address.address(),
-            ipv6: v6.address.address(),
-            interface: 0,
-            mac: {
-                #[allow(irrefutable_let_patterns)]
-                let HardwareAddress::Ethernet(addr) = self.stack.hardware_address() else {
-                    panic!("Invalid hardware address");
-                };
+        let mut hw_addr = [0; 8];
+        match self.stack.hardware_address() {
+            HardwareAddress::Ethernet(addr) => hw_addr[..6].copy_from_slice(&addr.0),
+            #[allow(unreachable_patterns)]
+            _ => (),
+        }
 
-                addr.0
+        f(&NetifInfo {
+            name: "enet",
+            operational: self.stack.is_link_up(),
+            offprem_svc_reachable_ipv4: None,
+            offprem_svc_reachable_ipv6: None,
+            hw_addr: &hw_addr,
+            ipv4_addrs: if let Some(addrs) = v4.map(|v4| [v4.address.address()]).as_ref() {
+                addrs.as_slice()
+            } else {
+                &[]
             },
-        };
+            ipv6_addrs: if let Some(addrs) = v6.map(|v6| [v6.address.address()]).as_ref() {
+                addrs.as_slice()
+            } else {
+                &[]
+            },
+            netif_type: self.netif_type,
+        })?;
 
-        Some(conf)
+        Ok(())
     }
+}
 
-    async fn wait_conf_change(&self) {
+impl NetChangeNotif for EnetNetif<'_> {
+    async fn wait_changed(&self) {
         // Embassy does have a `wait_config_up/down` but no `wait_config_change`
         // Use a timer as a workaround
 
@@ -113,18 +132,6 @@ impl<'d> EnetNetif<'d> {
         }
 
         self.up.lock(|up| up.set(self.stack.is_config_up()));
-    }
-}
-
-impl Netif for EnetNetif<'_> {
-    async fn get_conf(&self) -> Result<Option<NetifConf>, Error> {
-        Ok(EnetNetif::get_conf(self))
-    }
-
-    async fn wait_conf_change(&self) -> Result<(), Error> {
-        EnetNetif::wait_conf_change(self).await;
-
-        Ok(())
     }
 }
 

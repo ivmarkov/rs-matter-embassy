@@ -3,25 +3,37 @@
 
 use core::fmt::Write;
 use core::future::poll_fn;
-use core::net::{Ipv4Addr, Ipv6Addr};
 
 use embassy_futures::select::select;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 
-use ::openthread::{RamSettings, RamSettingsChange, SettingsKey, SharedRamSettings};
 use openthread::{
-    OpenThread, OtError, OtResources, OtSrpResources, OtUdpResources, SrpConf, SrpService,
+    Channels, OpenThread, OtError, OtResources, OtSrpResources, OtUdpResources, RamSettings,
+    RamSettingsChange, SettingsKey, SharedRamSettings, SrpConf, SrpService,
 };
 
-use rs_matter::utils::init::zeroed;
-use rs_matter_stack::matter::error::Error;
-use rs_matter_stack::matter::mdns::ServiceMode;
-use rs_matter_stack::matter::transport::network::MAX_RX_PACKET_SIZE;
-use rs_matter_stack::matter::utils::init::{init, Init};
-use rs_matter_stack::mdns::MatterMdnsServices;
-use rs_matter_stack::netif::{Netif, NetifConf};
-use rs_matter_stack::persist::{KvBlobStore, SharedKvBlobStore, VENDOR_KEYS_START};
+use crate::fmt::Bytes;
+
+use crate::matter::data_model::networks::NetChangeNotif;
+use crate::matter::data_model::sdm::gen_diag::{InterfaceTypeEnum, NetifDiag, NetifInfo};
+use crate::matter::data_model::sdm::net_comm::{
+    NetCtl, NetCtlError, NetworkScanInfo, NetworkType, WirelessCreds,
+};
+use crate::matter::data_model::sdm::thread_diag::{
+    NeighborTable, NetworkFaultEnum, OperationalDatasetComponents, RouteTable, RoutingRoleEnum,
+    SecurityPolicy, ThreadDiag,
+};
+use crate::matter::data_model::sdm::wifi_diag::WirelessDiag;
+use crate::matter::error::Error;
+use crate::matter::error::ErrorCode;
+use crate::matter::mdns::ServiceMode;
+use crate::matter::transport::network::MAX_RX_PACKET_SIZE;
+use crate::matter::utils::init::zeroed;
+use crate::matter::utils::init::{init, Init};
+use crate::matter::utils::storage::Vec;
+use crate::stack::mdns::MatterMdnsServices;
+use crate::stack::persist::{KvBlobStore, SharedKvBlobStore, VENDOR_KEYS_START};
 
 /// Re-export the `openthread` crate
 pub mod openthread {
@@ -78,7 +90,7 @@ impl Default for OtMatterResources {
     }
 }
 
-/// A `Netif` trait implementation for `openthread`
+/// A `NetifDiag` anf `NetChangeNotif` traits implementation for `openthread`
 pub struct OtNetif<'d>(OpenThread<'d>);
 
 impl<'d> OtNetif<'d> {
@@ -86,70 +98,234 @@ impl<'d> OtNetif<'d> {
     pub const fn new(ot: OpenThread<'d>) -> Self {
         Self(ot)
     }
+}
 
-    fn get_conf(&self) -> Option<NetifConf> {
+impl NetifDiag for OtNetif<'_> {
+    fn netifs(&self, f: &mut dyn FnMut(&NetifInfo) -> Result<(), Error>) -> Result<(), Error> {
         let status = self.0.net_status();
 
-        if status.ip6_enabled && status.role.is_connected() {
-            let mut ipv6 = Ipv6Addr::UNSPECIFIED;
+        let mut addrs = Vec::<_, 6>::new();
 
-            let _ = self.0.ipv6_addrs(|addr| {
-                if let Some((addr, prefix)) = addr {
-                    info!("Got addr {}/{}", addr, prefix);
-
-                    if ipv6.is_unspecified()
-                        || ipv6.is_unicast_link_local()
-                        || ipv6.is_unique_local()
-                            && !addr.is_unicast_link_local()
-                            && !addr.is_unique_local()
-                    {
-                        // Do not prefer link-local and unique-local addresses as they are not addressable in the Thread mesh
-                        ipv6 = addr;
-                    }
+        let _ = self.0.ipv6_addrs(|addr| {
+            if let Some((addr, _)) = addr {
+                if addrs.len() < addrs.capacity() {
+                    unwrap!(addrs.push(addr));
                 }
+            }
 
-                Ok(())
-            });
+            Ok(())
+        }); // TODO
 
-            unwrap!(self.0.srp_conf(|conf, state, empty| {
-                info!("SRP conf: {:?}, state: {}, empty: {}", conf, state, empty);
+        f(&NetifInfo {
+            name: "ot",
+            operational: status.ip6_enabled && status.role.is_connected(),
+            offprem_svc_reachable_ipv4: None,
+            offprem_svc_reachable_ipv6: None,
+            hw_addr: &self.0.ieee_eui64(),
+            ipv4_addrs: &[],
+            ipv6_addrs: &addrs,
+            netif_type: InterfaceTypeEnum::Thread,
+        })?;
 
-                Ok(())
-            }));
-
-            unwrap!(self.0.srp_services(|service| {
-                if let Some((service, state, slot)) = service {
-                    info!("SRP service: {}, state: {}, slot: {}", service, state, slot);
-                }
-            }));
-
-            let conf = NetifConf {
-                ipv4: Ipv4Addr::UNSPECIFIED,
-                ipv6,
-                interface: 0,
-                // TODO: Fix this in `rs-matter-stack`
-                mac: unwrap!(self.0.ieee_eui64()[..6].try_into()),
-            };
-
-            Some(conf)
-        } else {
-            None
-        }
-    }
-
-    async fn wait_conf_change(&self) {
-        self.0.wait_changed().await;
+        Ok(())
     }
 }
 
-impl Netif for OtNetif<'_> {
-    async fn get_conf(&self) -> Result<Option<NetifConf>, Error> {
-        Ok(OtNetif::get_conf(self))
+impl NetChangeNotif for OtNetif<'_> {
+    async fn wait_changed(&self) {
+        self.0.wait_changed().await
+    }
+}
+
+/// A `NetCtl`, `NetChangeNotif`, `WirelessDiag` and `ThreadDiag` traits implementation for `openthread`
+pub struct OtNetCtl<'a>(OpenThread<'a>);
+
+impl<'a> OtNetCtl<'a> {
+    /// Create a new instance of the `OtNetCtl` type.
+    pub fn new(ot: OpenThread<'a>) -> Self {
+        Self(ot)
+    }
+}
+
+impl NetCtl for OtNetCtl<'_> {
+    fn net_type(&self) -> NetworkType {
+        NetworkType::Thread
     }
 
-    async fn wait_conf_change(&self) -> Result<(), Error> {
-        OtNetif::wait_conf_change(self).await;
+    async fn scan<F>(&self, network: Option<&[u8]>, mut f: F) -> Result<(), NetCtlError>
+    where
+        F: FnMut(&NetworkScanInfo) -> Result<(), Error>,
+    {
+        const SCAN_DURATION_MILLIS: u16 = 2000;
 
+        self.0
+            .scan(Channels::all(), SCAN_DURATION_MILLIS, |scan_result| {
+                let Some(scan_result) = scan_result else {
+                    return;
+                };
+
+                if network
+                    .map(|id| id == scan_result.extended_pan_id.to_be_bytes())
+                    .unwrap_or(true)
+                {
+                    let _ = f(&NetworkScanInfo::Thread {
+                        pan_id: scan_result.pan_id,
+                        ext_pan_id: scan_result.extended_pan_id,
+                        network_name: scan_result.network_name,
+                        channel: scan_result.channel as _,
+                        version: scan_result.version,
+                        ext_addr: &scan_result.ext_address.to_be_bytes(),
+                        rssi: scan_result.rssi,
+                        lqi: scan_result.lqi,
+                    });
+                }
+            })
+            .await
+            .map_err(to_net_matter_err)
+    }
+
+    async fn connect(&self, creds: &WirelessCreds<'_>) -> Result<(), NetCtlError> {
+        let WirelessCreds::Thread { dataset_tlv } = creds else {
+            return Err(NetCtlError::Other(ErrorCode::InvalidAction.into()));
+        };
+
+        const TIMEOUT_SECS: u64 = 20;
+
+        let _ = self.0.enable_thread(false);
+
+        // NOTE: Printing the dataset is a security issue, but we do it for now for debugging purposes
+        // (i.e. for running some of the pseudo-eth examples the user needs the Thread network dataset)
+        info!(
+            "Connecting to Thread network, dataset: {:x}",
+            Bytes(dataset_tlv)
+        );
+
+        self.0
+            .set_active_dataset_tlv(dataset_tlv)
+            .map_err(to_net_matter_err)?;
+
+        self.0.enable_thread(true).map_err(to_net_matter_err)?;
+
+        let now = Instant::now();
+
+        while !self.0.net_status().role.is_connected() {
+            if now.elapsed().as_secs() > TIMEOUT_SECS {
+                let _ = self.0.enable_thread(false);
+
+                return Err(NetCtlError::OtherConnectionFailure);
+            }
+
+            select(self.0.wait_changed(), Timer::after(Duration::from_secs(1))).await;
+        }
+
+        Ok(())
+    }
+}
+
+impl NetChangeNotif for OtNetCtl<'_> {
+    async fn wait_changed(&self) {
+        self.0.wait_changed().await
+    }
+}
+
+impl WirelessDiag for OtNetCtl<'_> {
+    fn connected(&self) -> Result<bool, Error> {
+        let status = self.0.net_status();
+
+        Ok(status.role.is_connected())
+    }
+}
+
+// TODO
+impl ThreadDiag for OtNetCtl<'_> {
+    fn channel(&self) -> Result<Option<u16>, Error> {
+        Ok(None)
+    }
+
+    fn routing_role(&self) -> Result<Option<RoutingRoleEnum>, Error> {
+        Ok(None)
+    }
+
+    fn network_name(
+        &self,
+        f: &mut dyn FnMut(Option<&str>) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        f(None)
+    }
+
+    fn pan_id(&self) -> Result<Option<u16>, Error> {
+        Ok(None)
+    }
+
+    fn extended_pan_id(&self) -> Result<Option<u64>, Error> {
+        let status = self.0.net_status();
+
+        Ok(status.ext_pan_id)
+    }
+
+    fn mesh_local_prefix(
+        &self,
+        f: &mut dyn FnMut(Option<&[u8]>) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        f(None)
+    }
+
+    fn neightbor_table(
+        &self,
+        _f: &mut dyn FnMut(&NeighborTable) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn route_table(
+        &self,
+        _f: &mut dyn FnMut(&RouteTable) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn partition_id(&self) -> Result<Option<u32>, Error> {
+        Ok(None)
+    }
+
+    fn weighting(&self) -> Result<Option<u16>, Error> {
+        Ok(None)
+    }
+
+    fn data_version(&self) -> Result<Option<u16>, Error> {
+        Ok(None)
+    }
+
+    fn stable_data_version(&self) -> Result<Option<u16>, Error> {
+        Ok(None)
+    }
+
+    fn leader_router_id(&self) -> Result<Option<u8>, Error> {
+        Ok(None)
+    }
+
+    fn security_policy(&self) -> Result<Option<SecurityPolicy>, Error> {
+        Ok(None)
+    }
+
+    fn channel_page0_mask(
+        &self,
+        f: &mut dyn FnMut(Option<&[u8]>) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        f(None)
+    }
+
+    fn operational_dataset_components(
+        &self,
+        f: &mut dyn FnMut(Option<&OperationalDatasetComponents>) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        f(None)
+    }
+
+    fn active_network_faults_list(
+        &self,
+        _f: &mut dyn FnMut(NetworkFaultEnum) -> Result<(), Error>,
+    ) -> Result<(), Error> {
         Ok(())
     }
 }
@@ -207,7 +383,7 @@ impl<'d> OtMdns<'d> {
             // TODO: Something is still not quite right with the SRP
             // We seem to get stuck here
             while !self.ot.srp_is_empty()? {
-                info!("Waiting for SRP records to be removed...");
+                debug!("Waiting for SRP records to be removed...");
                 select(
                     Timer::after(Duration::from_secs(1)),
                     self.ot.srp_wait_changed(),
@@ -370,4 +546,14 @@ where
             self.store().await?;
         }
     }
+}
+
+pub(crate) fn to_net_matter_err(err: OtError) -> NetCtlError {
+    NetCtlError::Other(to_matter_err(err))
+}
+
+pub(crate) fn to_matter_err(err: OtError) -> Error {
+    error!("OpenThread error: {:?}", err);
+
+    ErrorCode::NoNetworkInterface.into()
 }

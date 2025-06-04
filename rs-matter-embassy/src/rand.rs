@@ -34,8 +34,6 @@ pub mod rp {
 
     // TODO: Not cryptographically secure?
     pub fn rp_rand(buf: &mut [u8]) {
-        use rand_core::RngCore;
-
         let mut rng = RoscRng;
         rng.fill_bytes(buf);
     }
@@ -45,17 +43,17 @@ pub mod rp {
 pub mod nrf {
     use core::cell::RefCell;
 
-    use embassy_nrf::peripherals::RNG;
     use embassy_nrf::rng::Rng;
+    use embassy_nrf::{mode::Blocking, peripherals::RNG};
 
     use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
 
-    static RAND: Mutex<CriticalSectionRawMutex, RefCell<Option<Rng<'_, RNG>>>> =
+    static RAND: Mutex<CriticalSectionRawMutex, RefCell<Option<Rng<'_, RNG, Blocking>>>> =
         Mutex::new(RefCell::new(None));
 
     /// Initialize the nrf-specific `rand` implementation
     /// Need to do this only once
-    pub fn nrf_init_rand(rng: Rng<'static, RNG>) {
+    pub fn nrf_init_rand(rng: Rng<'static, RNG, Blocking>) {
         RAND.lock(|r| *r.borrow_mut() = Some(rng));
     }
 

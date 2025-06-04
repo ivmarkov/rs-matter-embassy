@@ -7,6 +7,7 @@
 //! The example implements a fictitious Light device (an On-Off Matter cluster).
 #![no_std]
 #![no_main]
+#![recursion_limit = "256"]
 
 use core::mem::MaybeUninit;
 use core::pin::pin;
@@ -27,21 +28,21 @@ use embedded_alloc::LlffHeap;
 use defmt::{info, unwrap};
 
 use rs_matter_embassy::epoch::epoch;
-use rs_matter_embassy::matter::data_model::cluster_basic_information::BasicInfoConfig;
-use rs_matter_embassy::matter::data_model::cluster_on_off;
+use rs_matter_embassy::matter::data_model::basic_info::BasicInfoConfig;
 use rs_matter_embassy::matter::data_model::device_types::DEV_TYPE_ON_OFF_LIGHT;
-use rs_matter_embassy::matter::data_model::objects::{Dataver, Endpoint, HandlerCompat, Node};
-use rs_matter_embassy::matter::data_model::system_model::descriptor;
+use rs_matter_embassy::matter::data_model::objects::{
+    Async, Dataver, EmptyHandler, Endpoint, Node,
+};
+use rs_matter_embassy::matter::data_model::on_off::{self, ClusterHandler as _};
+use rs_matter_embassy::matter::data_model::system_model::desc::{self, ClusterHandler as _};
+use rs_matter_embassy::matter::test_device::{TEST_DEV_ATT, TEST_DEV_COMM, TEST_DEV_DET};
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
-use rs_matter_embassy::matter::{BasicCommData, MATTER_PORT};
+use rs_matter_embassy::matter::{clusters, devices, BasicCommData, MATTER_PORT};
 use rs_matter_embassy::rand::nrf::{nrf_init_rand, nrf_rand};
 use rs_matter_embassy::stack::mdns::MatterMdnsServices;
 use rs_matter_embassy::stack::persist::DummyKvBlobStore;
 use rs_matter_embassy::stack::rand::RngCore;
-use rs_matter_embassy::stack::test_device::{
-    TEST_BASIC_COMM_DATA, TEST_DEV_ATT, TEST_PID, TEST_VID,
-};
 use rs_matter_embassy::stack::MdnsType;
 use rs_matter_embassy::wireless::nrf::{
     NrfThreadClockInterruptHandler, NrfThreadDriver, NrfThreadHighPrioInterruptHandler,
@@ -112,7 +113,7 @@ async fn main(_s: Spawner) {
 
     let p = embassy_nrf::init(config);
 
-    let mut rng = rng::Rng::new(p.RNG, Irqs);
+    let mut rng = rng::Rng::new_blocking(p.RNG);
 
     // Use a random/unique Matter discriminator for this session,
     // in case there are left-overs from our previous registrations in Thread SRP
@@ -140,7 +141,7 @@ async fn main(_s: Spawner) {
     let stack = mk_static!(EmbassyThreadMatterStack).init_with(EmbassyThreadMatterStack::init(
         &TEST_BASIC_INFO,
         BasicCommData {
-            password: TEST_BASIC_COMM_DATA.password,
+            password: TEST_DEV_COMM.password,
             discriminator,
         },
         &TEST_DEV_ATT,
@@ -187,26 +188,22 @@ async fn main(_s: Spawner) {
     // == Step 4: ==
     // Our "light" on-off cluster.
     // Can be anything implementing `rs_matter::data_model::AsyncHandler`
-    let on_off = cluster_on_off::OnOffCluster::new(Dataver::new_rand(stack.matter().rand()));
+    let on_off = on_off::OnOffHandler::new(Dataver::new_rand(stack.matter().rand()));
 
-    // Chain our endpoint clusters with the
-    // (root) Endpoint 0 system clusters in the final handler
-    let handler = stack
-        .root_handler()
+    // Chain our endpoint clusters
+    let handler = EmptyHandler
         // Our on-off cluster, on Endpoint 1
         .chain(
             LIGHT_ENDPOINT_ID,
-            cluster_on_off::ID,
-            HandlerCompat(&on_off),
+            on_off::OnOffHandler::CLUSTER.id,
+            Async(on_off::HandlerAdaptor(&on_off)),
         )
         // Each Endpoint needs a Descriptor cluster too
         // Just use the one that `rs-matter` provides out of the box
         .chain(
             LIGHT_ENDPOINT_ID,
-            descriptor::ID,
-            HandlerCompat(descriptor::DescriptorCluster::new(Dataver::new_rand(
-                stack.matter().rand(),
-            ))),
+            desc::DescHandler::CLUSTER.id,
+            Async(desc::DescHandler::new(Dataver::new_rand(stack.matter().rand())).adapt()),
         );
 
     // == Step 5: ==
@@ -224,7 +221,7 @@ async fn main(_s: Spawner) {
         // Our `AsyncHandler` + `AsyncMetadata` impl
         (NODE, handler),
         // No user future to run
-        core::future::pending(),
+        (),
     ));
 
     // Just for demoing purposes:
@@ -255,18 +252,8 @@ async fn main(_s: Spawner) {
 /// Basic info about our device
 /// Both the matter stack as well as our mDNS-to-SRP bridge need this, hence extracted out
 const TEST_BASIC_INFO: BasicInfoConfig = BasicInfoConfig {
-    vid: TEST_VID,
-    pid: TEST_PID,
-    hw_ver: 2,
-    hw_ver_str: "2",
-    sw_ver: 1,
-    sw_ver_str: "1",
-    serial_no: "aabbccdd",
-    device_name: "MyLight",
-    product_name: "ACME Light",
-    vendor_name: "ACME",
-    sai: Some(1000),
-    sii: None,
+    sai: Some(500),
+    ..TEST_DEV_DET
 };
 
 /// Endpoint 0 (the root endpoint) always runs
@@ -277,11 +264,11 @@ const LIGHT_ENDPOINT_ID: u16 = 1;
 const NODE: Node = Node {
     id: 0,
     endpoints: &[
-        EmbassyThreadMatterStack::<()>::root_metadata(),
+        EmbassyThreadMatterStack::<()>::root_endpoint(),
         Endpoint {
             id: LIGHT_ENDPOINT_ID,
-            device_types: &[DEV_TYPE_ON_OFF_LIGHT],
-            clusters: &[descriptor::CLUSTER, cluster_on_off::CLUSTER],
+            device_types: devices!(DEV_TYPE_ON_OFF_LIGHT),
+            clusters: clusters!(desc::DescHandler::CLUSTER, on_off::OnOffHandler::CLUSTER),
         },
     ],
 };
