@@ -212,7 +212,10 @@ async fn main(_s: Spawner) {
     let handler = EmptyHandler
         // Our on-off cluster, on Endpoint 1
         .chain(
-            EpClMatcher::new(Some(LIGHT_ENDPOINT_ID), Some(on_off::OnOffHandler::CLUSTER.id)),
+            EpClMatcher::new(
+                Some(LIGHT_ENDPOINT_ID),
+                Some(on_off::OnOffHandler::CLUSTER.id),
+            ),
             Async(on_off::HandlerAdaptor(&on_off)),
         )
         // Each Endpoint needs a Descriptor cluster too
