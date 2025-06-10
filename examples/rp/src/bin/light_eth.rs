@@ -31,7 +31,7 @@ use rs_matter_embassy::eth::{EmbassyEthMatterStack, EmbassyEthernet, Preexisting
 use rs_matter_embassy::matter::data_model::basic_info::BasicInfoConfig;
 use rs_matter_embassy::matter::data_model::device_types::DEV_TYPE_ON_OFF_LIGHT;
 use rs_matter_embassy::matter::data_model::objects::{
-    Async, Dataver, EmptyHandler, Endpoint, Node,
+    Async, Dataver, EmptyHandler, Endpoint, EpClMatcher, Node,
 };
 use rs_matter_embassy::matter::data_model::on_off::{self, ClusterHandler as _};
 use rs_matter_embassy::matter::data_model::system_model::desc::{self, ClusterHandler as _};
@@ -146,15 +146,13 @@ async fn main(spawner: Spawner) {
     let handler = EmptyHandler
         // Our on-off cluster, on Endpoint 1
         .chain(
-            LIGHT_ENDPOINT_ID,
-            on_off::OnOffHandler::CLUSTER.id,
+            EpClMatcher::new(Some(LIGHT_ENDPOINT_ID), Some(on_off::OnOffHandler::CLUSTER.id)),
             Async(on_off::HandlerAdaptor(&on_off)),
         )
         // Each Endpoint needs a Descriptor cluster too
         // Just use the one that `rs-matter` provides out of the box
         .chain(
-            LIGHT_ENDPOINT_ID,
-            desc::DescHandler::CLUSTER.id,
+            EpClMatcher::new(Some(LIGHT_ENDPOINT_ID), Some(desc::DescHandler::CLUSTER.id)),
             Async(desc::DescHandler::new(Dataver::new_rand(stack.matter().rand())).adapt()),
         );
 
