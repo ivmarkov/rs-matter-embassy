@@ -52,7 +52,7 @@ debug = true
 opt-level = "z"
 
 [features]
-default = ["rs-matter-stack"]
+default = []
 embassy-net = ["dep:embassy-net", "edge-nal-embassy", "openthread?/embassy-net-driver-channel"]
 esp = ["esp-wifi", "esp-hal", "openthread?/esp-ieee802154"]
 rp = ["cyw43", "cyw43-pio", "embassy-rp", "rand_core"]
@@ -70,7 +70,7 @@ embassy-sync = "0.7"
 embassy-time = "0.4"
 embedded-io = "0.6"
 scopeguard = { version = "1", default-features = false }
-rs-matter-stack = { git = "https://github.com/ivmarkov/rs-matter-stack", default-features = false, optional = true, features = ["rustcrypto"] }
+rs-matter-stack = { git = "https://github.com/ivmarkov/rs-matter-stack", default-features = false, features = ["rustcrypto"] }
 static_cell = "2"
 
 embedded-storage-async = "0.4.1"

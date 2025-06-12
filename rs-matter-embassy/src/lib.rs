@@ -16,16 +16,13 @@ pub mod ble;
 pub mod enet;
 pub mod epoch;
 pub mod error;
-#[cfg(all(feature = "rs-matter-stack", feature = "embassy-net"))]
+#[cfg(feature = "embassy-net")]
 pub mod eth;
 pub mod matter;
 #[cfg(feature = "openthread")]
 pub mod ot;
-#[cfg(feature = "rs-matter-stack")]
 pub mod persist;
 pub mod rand;
-#[cfg(feature = "rs-matter-stack")]
 pub mod stack;
 pub mod wifi;
-#[cfg(feature = "rs-matter-stack")]
 pub mod wireless;
