@@ -125,6 +125,7 @@ impl NetifDiag for OtNetif<'_> {
             ipv4_addrs: &[],
             ipv6_addrs: &addrs,
             netif_type: InterfaceTypeEnum::Thread,
+            netif_index: 0, // Not used with OT
         })?;
 
         Ok(())

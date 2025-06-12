@@ -106,6 +106,7 @@ impl NetifDiag for EnetNetif<'_> {
                 &[]
             },
             netif_type: self.netif_type,
+            netif_index: 0, // Not used on baremetal
         })?;
 
         Ok(())
