@@ -38,8 +38,7 @@ rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "next" }
 #edge-mdns = { git = "https://github.com/ivmarkov/edge-net" }
 nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc.git" }
 nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git" }
-#trouble-host = { version = "0.1", git = "https://github.com/embassy-rs/trouble" }
-trouble-host = { version = "0.1", git = "https://github.com/ivmarkov/trouble", branch = "restore-pub" }
+trouble-host = { version = "0.1", git = "https://github.com/embassy-rs/trouble" }
 #trouble-host = { version = "0.1", path = "../../../trouble/host" }
 embassy-nrf = { version = "0.3", git = "https://github.com/embassy-rs/embassy" }
 embassy-sync = { version = "0.7", git = "https://github.com/embassy-rs/embassy" }
