@@ -33,8 +33,8 @@ rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "next" }
 #edge-nal = { git = "https://github.com/ivmarkov/edge-net" }
 #edge-nal-embassy = { git = "https://github.com/ivmarkov/edge-net" }
 #edge-mdns = { git = "https://github.com/ivmarkov/edge-net" }
-trouble-host = { version = "0.1", git = "https://github.com/embassy-rs/trouble" }
-#trouble-host = { version = "0.1", path = "../../../trouble/host" }
+#trouble-host = { version = "0.2", git = "https://github.com/embassy-rs/trouble" }
+#trouble-host = { version = "0.2", path = "../../../trouble/host" }
 embassy-sync = { version = "0.7", git = "https://github.com/embassy-rs/embassy" }
 embassy-time = { version = "0.4", git = "https://github.com/embassy-rs/embassy" }
 embassy-time-driver = { version = "0.2", git = "https://github.com/embassy-rs/embassy" }
