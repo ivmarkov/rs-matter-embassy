@@ -12,10 +12,10 @@ use embassy_net::{
 use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
 use embassy_time::{Duration, Timer};
 
-use crate::matter::data_model::networks::NetChangeNotif;
-use crate::matter::data_model::sdm::gen_diag::{InterfaceTypeEnum, NetifDiag, NetifInfo};
-use crate::stack::matter::error::Error;
-use crate::stack::matter::transport::network::{MAX_RX_PACKET_SIZE, MAX_TX_PACKET_SIZE};
+use crate::matter::dm::clusters::gen_diag::{InterfaceTypeEnum, NetifDiag, NetifInfo};
+use crate::matter::dm::networks::NetChangeNotif;
+use crate::matter::error::Error;
+use crate::matter::transport::network::{MAX_RX_PACKET_SIZE, MAX_TX_PACKET_SIZE};
 
 /// Re-export the `edge-nal-embassy` crate
 pub use edge_nal_embassy::*;

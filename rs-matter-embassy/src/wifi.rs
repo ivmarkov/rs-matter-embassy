@@ -10,14 +10,14 @@ pub mod esp {
         AuthMethod, ClientConfiguration, Configuration, ScanConfig, WifiController, WifiError,
     };
 
-    use crate::matter::data_model::networks::NetChangeNotif;
-    use crate::matter::data_model::sdm::net_comm::{
+    use crate::matter::dm::clusters::net_comm::{
         NetCtl, NetCtlError, NetworkScanInfo, NetworkType, WiFiBandEnum, WiFiSecurityBitmap,
         WirelessCreds,
     };
-    use crate::matter::data_model::sdm::wifi_diag::{
+    use crate::matter::dm::clusters::wifi_diag::{
         SecurityTypeEnum, WiFiVersionEnum, WifiDiag, WirelessDiag,
     };
+    use crate::matter::dm::networks::NetChangeNotif;
     use crate::matter::error::{Error, ErrorCode};
     use crate::matter::tlv::Nullable;
 
@@ -261,14 +261,14 @@ pub mod rp {
 
     use crate::fmt::Bytes;
 
-    use crate::matter::data_model::networks::NetChangeNotif;
-    use crate::matter::data_model::sdm::net_comm::{
+    use crate::matter::dm::clusters::net_comm::{
         NetCtl, NetCtlError, NetworkScanInfo, NetworkType, WiFiBandEnum, WiFiSecurityBitmap,
         WirelessCreds,
     };
-    use crate::matter::data_model::sdm::wifi_diag::{
+    use crate::matter::dm::clusters::wifi_diag::{
         SecurityTypeEnum, WiFiVersionEnum, WifiDiag, WirelessDiag,
     };
+    use crate::matter::dm::networks::NetChangeNotif;
     use crate::matter::error::{Error, ErrorCode};
     use crate::matter::tlv::Nullable;
 
