@@ -16,6 +16,7 @@ rust-version = "1.84"
 harness = false
 
 #[patch.'https://github.com/ivmarkov/rs-matter-stack']
+#rs-matter-stack = { git = "https://github.com/ivmarkov//rs-matter-stack.git" }
 #rs-matter-stack = { path = "../../rs-matter-stack" }
 #[patch.'https://github.com/esp-rs/openthread']
 #openthread = { version = "0.1", path = "../../../esp-openthread/openthread" }

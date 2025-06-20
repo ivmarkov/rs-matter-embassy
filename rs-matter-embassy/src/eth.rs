@@ -9,7 +9,7 @@ use embassy_futures::select::select;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 
 use crate::enet::{create_enet_stack, EnetMatterStackResources, EnetMatterUdpBuffers, EnetNetif};
-use crate::matter::data_model::sdm::gen_diag::InterfaceTypeEnum;
+use crate::matter::dm::clusters::gen_diag::InterfaceTypeEnum;
 use crate::matter::error::Error;
 use crate::matter::utils::init::{init, Init};
 use crate::matter::utils::rand::Rand;

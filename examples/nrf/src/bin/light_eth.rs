@@ -32,14 +32,12 @@ use embedded_alloc::LlffHeap;
 use defmt::{info, unwrap};
 
 use rs_matter_embassy::epoch::epoch;
-use rs_matter_embassy::matter::data_model::basic_info::BasicInfoConfig;
-use rs_matter_embassy::matter::data_model::device_types::DEV_TYPE_ON_OFF_LIGHT;
-use rs_matter_embassy::matter::data_model::objects::{
-    Async, Dataver, EmptyHandler, Endpoint, EpClMatcher, Node,
-};
-use rs_matter_embassy::matter::data_model::on_off::{self, ClusterHandler as _};
-use rs_matter_embassy::matter::data_model::system_model::desc::{self, ClusterHandler as _};
-use rs_matter_embassy::matter::test_device::{TEST_DEV_ATT, TEST_DEV_COMM, TEST_DEV_DET};
+use rs_matter_embassy::matter::dm::clusters::basic_info::BasicInfoConfig;
+use rs_matter_embassy::matter::dm::clusters::desc::{self, ClusterHandler as _};
+use rs_matter_embassy::matter::dm::clusters::on_off::{self, ClusterHandler as _};
+use rs_matter_embassy::matter::dm::devices::test::{TEST_DEV_ATT, TEST_DEV_COMM, TEST_DEV_DET};
+use rs_matter_embassy::matter::dm::devices::DEV_TYPE_ON_OFF_LIGHT;
+use rs_matter_embassy::matter::dm::{Async, Dataver, EmptyHandler, Endpoint, EpClMatcher, Node};
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
 use rs_matter_embassy::matter::{clusters, devices, BasicCommData, MATTER_PORT};

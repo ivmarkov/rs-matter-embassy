@@ -6,7 +6,7 @@ use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 use openthread::{OpenThread, Radio};
 
 use crate::ble::{ControllerRef, TroubleBtpGattContext, TroubleBtpGattPeripheral};
-use crate::matter::data_model::networks::wireless::Thread;
+use crate::matter::dm::networks::wireless::Thread;
 use crate::matter::error::Error;
 use crate::matter::utils::init::{init, Init};
 use crate::matter::utils::rand::Rand;

@@ -2,7 +2,7 @@
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 
-use crate::matter::data_model::networks::wireless::WirelessNetwork;
+use crate::matter::dm::networks::wireless::WirelessNetwork;
 use crate::matter::utils::rand::Rand;
 use crate::stack::matter::error::Error;
 use crate::stack::matter::utils::init::{init, Init};

@@ -15,16 +15,16 @@ use openthread::{
 
 use crate::fmt::Bytes;
 
-use crate::matter::data_model::networks::NetChangeNotif;
-use crate::matter::data_model::sdm::gen_diag::{InterfaceTypeEnum, NetifDiag, NetifInfo};
-use crate::matter::data_model::sdm::net_comm::{
+use crate::matter::dm::clusters::gen_diag::{InterfaceTypeEnum, NetifDiag, NetifInfo};
+use crate::matter::dm::clusters::net_comm::{
     NetCtl, NetCtlError, NetworkScanInfo, NetworkType, WirelessCreds,
 };
-use crate::matter::data_model::sdm::thread_diag::{
+use crate::matter::dm::clusters::thread_diag::{
     NeighborTable, NetworkFaultEnum, OperationalDatasetComponents, RouteTable, RoutingRoleEnum,
     SecurityPolicy, ThreadDiag,
 };
-use crate::matter::data_model::sdm::wifi_diag::WirelessDiag;
+use crate::matter::dm::clusters::wifi_diag::WirelessDiag;
+use crate::matter::dm::networks::NetChangeNotif;
 use crate::matter::error::Error;
 use crate::matter::error::ErrorCode;
 use crate::matter::mdns::ServiceMode;
