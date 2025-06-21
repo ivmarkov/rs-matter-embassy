@@ -53,7 +53,7 @@ opt-level = "z"
 
 [features]
 default = []
-embassy-net = ["dep:embassy-net", "edge-nal-embassy", "openthread?/embassy-net-driver-channel"]
+embassy-net = ["dep:embassy-net", "edge-nal-embassy", "openthread?/embassy-net-driver-channel", "esp-wifi?/wifi"]
 esp = ["esp-wifi", "esp-hal", "openthread?/esp-ieee802154"]
 rp = ["cyw43", "cyw43-pio", "embassy-rp", "rand_core"]
 nrf = ["embassy-nrf", "rand_core", "nrf-sdc", "nrf-mpsl", "portable-atomic", "openthread?/embassy-nrf"]
@@ -85,7 +85,7 @@ bt-hci = "0.3.2"
 openthread = { version = "0.1", git = "https://github.com/esp-rs/openthread", optional = true, features = ["udp", "srp", "edge-nal"] }
 
 # Only necessary when `rs-matter-embassy` is providing extra-sugar for the `esp32*` chips family
-esp-wifi = { version = "0.14", optional = true, features = ["wifi", "ble"] }
+esp-wifi = { version = "0.14", optional = true, features = ["ble"] }
 esp-hal = { version = "=1.0.0-beta.1", optional = true, features = ["unstable"] }
 
 # Only necessary when `rs-matter-embassy` is providing extra-sugar for the RPi Pico W MCU
