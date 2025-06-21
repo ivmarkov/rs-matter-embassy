@@ -16,21 +16,21 @@ use crate::ble::{TroubleBtpGattContext, TroubleBtpGattPeripheral};
 
 #[cfg(feature = "openthread")]
 pub use thread::*;
-#[cfg(feature = "embassy-net")]
+#[cfg(not(feature = "esp32h2"))]
 pub use wifi::*;
 
 // Thread: Type aliases and state structs for an Embassy Matter stack running over a Thread network and BLE.
 #[cfg(feature = "openthread")]
 mod thread;
 // Wifi: Type aliases and state structs for an Embassy Matter stack running over a Wifi network and BLE.
-#[cfg(feature = "embassy-net")]
+#[cfg(not(feature = "esp32h2"))]
 mod wifi;
 
 #[cfg(feature = "esp")]
 pub mod esp {
     #[cfg(feature = "openthread")]
     pub use super::thread::esp_thread::*;
-    #[cfg(feature = "embassy-net")]
+    #[cfg(not(feature = "esp32h2"))]
     pub use super::wifi::esp_wifi::*;
 }
 

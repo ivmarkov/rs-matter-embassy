@@ -24,5 +24,6 @@ pub mod ot;
 pub mod persist;
 pub mod rand;
 pub mod stack;
+#[cfg(not(feature = "esp32h2"))]
 pub mod wifi;
 pub mod wireless;

@@ -1,4 +1,4 @@
-#[cfg(feature = "esp")]
+#[cfg(not(feature = "esp32h2"))]
 pub mod esp {
     use core::cell::Cell;
 
