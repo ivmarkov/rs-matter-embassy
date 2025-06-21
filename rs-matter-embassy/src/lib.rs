@@ -24,5 +24,7 @@ pub mod ot;
 pub mod persist;
 pub mod rand;
 pub mod stack;
+#[cfg(feature = "embassy-net")]
+// TODO: We need a dedicated "wifi" feature or at least a dedicated "esp-wifi" feature
 pub mod wifi;
 pub mod wireless;

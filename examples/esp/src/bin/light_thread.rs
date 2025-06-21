@@ -236,7 +236,20 @@ fn init_heap() {
         add_region(unsafe { &mut HEAP2 });
     }
 
-    #[cfg(not(feature = "esp32"))]
+    #[cfg(feature = "esp32h2")]
+    {
+        // The esp32 has two disjoint memory regions for heap
+        // Also, it has 64KB reserved for the BT stack in the first region, so we can't use that
+
+        static mut HEAP1: MaybeUninit<[u8; 94 * 1024]> = MaybeUninit::uninit();
+        #[link_section = ".dram2_uninit"]
+        static mut HEAP2: MaybeUninit<[u8; 67 * 1024]> = MaybeUninit::uninit();
+
+        add_region(unsafe { &mut HEAP1 });
+        add_region(unsafe { &mut HEAP2 });
+    }
+
+    #[cfg(not(any(feature = "esp32", feature = "esp32h2")))]
     {
         static mut HEAP: MaybeUninit<[u8; 186 * 1024]> = MaybeUninit::uninit();
 
