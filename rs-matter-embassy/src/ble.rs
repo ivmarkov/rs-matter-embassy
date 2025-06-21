@@ -275,7 +275,7 @@ where
             )
             .await?;
 
-            debug!("GATT: Indicate {} len {}", Bytes(&ind.data), ind.data.len());
+            trace!("GATT: Indicate {} len {}", Bytes(&ind.data), ind.data.len());
         }
     }
 
@@ -333,7 +333,7 @@ where
                             } else if Some(handle) == server.matter_service.c2.cccd_handle {
                                 let subscribed = bytes[0] != 0;
 
-                                debug!("GATT: Write to C2 CCC descriptor: {:?}", bytes);
+                                trace!("GATT: Write to C2 CCC descriptor: {:?}", bytes);
 
                                 if subscribed {
                                     callback(GattPeripheralEvent::NotifySubscribed(to_bt_addr(
@@ -349,7 +349,7 @@ where
                             }
                         }
                         AttClient::Confirmation(AttCfm::ConfirmIndication) => {
-                            debug!("GATT: Confirm indication");
+                            trace!("GATT: Confirm indication");
 
                             ind.with(|ind| {
                                 assert!(!ind.data.is_empty() && ind.in_flight);
