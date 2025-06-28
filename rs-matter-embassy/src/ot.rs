@@ -12,6 +12,8 @@ use openthread::{
     Channels, OpenThread, OtError, OtResources, OtSrpResources, OtUdpResources, RamSettings,
     RamSettingsChange, SettingsKey, SharedRamSettings, SrpConf, SrpService,
 };
+use rs_matter_stack::nal::noop::NoopNet;
+use rs_matter_stack::nal::NetStack;
 
 use crate::fmt::Bytes;
 
@@ -42,7 +44,8 @@ pub mod openthread {
 
 /// The maximum number of sockets that the Matter stack would use:
 /// - One, for the UDP socket used by the Matter protocol
-const OT_MAX_SOCKETS: usize = 1;
+// TODO: Make it configurable with a feature
+const OT_MAX_UDP_SOCKETS: usize = 1;
 
 const OT_MAX_SRP_RECORDS: usize = 4;
 const OT_SRP_BUF_SZ: usize = 512;
@@ -55,7 +58,7 @@ pub struct OtMatterResources {
     /// The OpenThread main resources
     pub ot: OtResources,
     /// The OpenThread UDP resources
-    pub udp: OtUdpResources<OT_MAX_SOCKETS, MAX_RX_PACKET_SIZE>,
+    pub udp: OtUdpResources<OT_MAX_UDP_SOCKETS, MAX_RX_PACKET_SIZE>,
     /// The OpenThread SRP resources
     pub srp: OtSrpResources<OT_MAX_SRP_RECORDS, OT_SRP_BUF_SZ>,
     /// The OpenThread `RamSettings` buffer
@@ -87,6 +90,63 @@ impl OtMatterResources {
 impl Default for OtMatterResources {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// An implementation of `NetStack` for `openthread`
+pub struct OtNetStack<'d>(OpenThread<'d>);
+
+impl<'d> OtNetStack<'d> {
+    /// Create a new `OtNetStack` instance
+    pub const fn new(ot: OpenThread<'d>) -> Self {
+        Self(ot)
+    }
+}
+
+impl<'d> NetStack for OtNetStack<'d> {
+    type UdpBind<'t>
+        = &'t OpenThread<'d>
+    where
+        Self: 't;
+
+    type UdpConnect<'t>
+        = NoopNet
+    where
+        Self: 't;
+
+    type TcpBind<'t>
+        = NoopNet
+    where
+        Self: 't;
+
+    type TcpConnect<'t>
+        = NoopNet
+    where
+        Self: 't;
+
+    type Dns<'t>
+        = NoopNet
+    where
+        Self: 't;
+
+    fn udp_bind(&self) -> Option<Self::UdpBind<'_>> {
+        Some(&self.0)
+    }
+
+    fn udp_connect(&self) -> Option<Self::UdpConnect<'_>> {
+        None
+    }
+
+    fn tcp_bind(&self) -> Option<Self::TcpBind<'_>> {
+        None
+    }
+
+    fn tcp_connect(&self) -> Option<Self::TcpConnect<'_>> {
+        None
+    }
+
+    fn dns(&self) -> Option<Self::Dns<'_>> {
+        None
     }
 }
 

@@ -3,12 +3,12 @@
 use core::mem::MaybeUninit;
 use core::pin::pin;
 
-use edge_nal_embassy::Udp;
-
 use embassy_futures::select::select;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 
-use crate::enet::{create_enet_stack, EnetMatterStackResources, EnetMatterUdpBuffers, EnetNetif};
+use crate::enet::{
+    create_enet_stack, EnetMatterStackResources, EnetMatterUdpBuffers, EnetNetif, EnetStack,
+};
 use crate::matter::dm::clusters::gen_diag::InterfaceTypeEnum;
 use crate::matter::error::Error;
 use crate::matter::utils::init::{init, Init};
@@ -208,10 +208,10 @@ where
                 let (stack, mut runner) =
                     create_enet_stack(driver, u64::from_le_bytes(seed), resources);
 
+                let net_stack = EnetStack::new(stack, buffers);
                 let netif = EnetNetif::new(stack, InterfaceTypeEnum::Ethernet);
-                let udp = Udp::new(stack, buffers);
 
-                let mut main = pin!(self.task.run(udp, netif));
+                let mut main = pin!(self.task.run(&net_stack, &netif));
                 let mut run = pin!(async {
                     runner.run().await;
                     #[allow(unreachable_code)]

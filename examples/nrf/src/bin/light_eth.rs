@@ -46,7 +46,7 @@ use rs_matter_embassy::ot::openthread::{
     Capabilities, EmbassyTimeTimer, OpenThread, PhyRadioRunner, ProxyRadio, ProxyRadioResources,
     RamSettings,
 };
-use rs_matter_embassy::ot::{OtMatterResources, OtMdns, OtNetif};
+use rs_matter_embassy::ot::{OtMatterResources, OtMdns, OtNetStack, OtNetif};
 use rs_matter_embassy::rand::nrf::{nrf_init_rand, nrf_rand};
 use rs_matter_embassy::stack::eth::EthMatterStack;
 use rs_matter_embassy::stack::mdns::MatterMdnsServices;
@@ -232,7 +232,7 @@ async fn main(_s: Spawner) {
     let store = stack.create_shared_store(DummyKvBlobStore);
     let mut matter = pin!(stack.run_preex(
         // The Matter stack needs to open two UDP sockets
-        ot.clone(),
+        OtNetStack::new(ot.clone()),
         // The Matter stack needs access to the netif so as to detect network going up/down
         OtNetif::new(ot.clone()),
         // The Matter stack needs a persister to store its state

@@ -12,7 +12,7 @@ use crate::matter::utils::init::{init, Init};
 use crate::matter::utils::rand::Rand;
 use crate::matter::utils::select::Coalesce;
 use crate::matter::utils::sync::IfMutex;
-use crate::ot::{to_matter_err, OtNetCtl, OtPersist};
+use crate::ot::{to_matter_err, OtNetCtl, OtNetStack, OtPersist};
 use crate::ot::{OtMatterResources, OtMdns, OtNetif};
 use crate::stack::mdns::MatterMdnsServices;
 use crate::stack::network::{Embedding, Network};
@@ -884,10 +884,11 @@ where
         .map_err(to_matter_err)?;
 
         let net_ctl = OtNetCtl::new(ot.clone());
+        let net_stack = OtNetStack::new(ot.clone());
         let netif = OtNetif::new(ot.clone());
         let mdns = OtMdns::new(ot.clone(), self.mdns_services).map_err(to_matter_err)?;
 
-        let mut main = pin!(self.task.run(ot.clone(), netif, net_ctl));
+        let mut main = pin!(self.task.run(&net_stack, &netif, &net_ctl));
         let mut radio = pin!(async {
             ot.run(radio).await;
             #[allow(unreachable_code)]
@@ -950,12 +951,13 @@ where
         .map_err(to_matter_err)?;
 
         let net_ctl = OtNetCtl::new(ot.clone());
+        let net_stack = OtNetStack::new(ot.clone());
         let netif = OtNetif::new(ot.clone());
         let mdns = OtMdns::new(ot.clone(), self.mdns_services).map_err(to_matter_err)?;
 
         let peripheral = TroubleBtpGattPeripheral::new(ble_ctl, self.rand, self.ble_context);
 
-        let mut main = pin!(self.task.run(ot.clone(), netif, net_ctl, peripheral));
+        let mut main = pin!(self.task.run(&net_stack, &netif, &net_ctl, peripheral));
         let mut radio = pin!(async {
             ot.run(radio).await;
             #[allow(unreachable_code)]

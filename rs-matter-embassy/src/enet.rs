@@ -16,6 +16,8 @@ use crate::matter::dm::clusters::gen_diag::{InterfaceTypeEnum, NetifDiag, NetifI
 use crate::matter::dm::networks::NetChangeNotif;
 use crate::matter::error::Error;
 use crate::matter::transport::network::{MAX_RX_PACKET_SIZE, MAX_TX_PACKET_SIZE};
+use crate::stack::nal::noop::NoopNet;
+use crate::stack::nal::NetStack;
 
 /// Re-export the `edge-nal-embassy` crate
 pub use edge_nal_embassy::*;
@@ -27,12 +29,17 @@ pub mod net {
 
 /// The minimum number of sockets that should be configured in the `embassy-net` `StackResources`:
 /// The two UDP sockets used by the Matter stack, plus extra 2 for DHCP + DNS
-pub const ENET_MIN_SOCKET_SET: usize = ENET_MAX_SOCKETS + 2;
+// TODO: Make it configurable with a feature
+pub const ENET_MIN_SOCKET_SET: usize = ENET_MAX_UDP_SOCKETS + 2;
 
 /// A type alias for the `UdpBuffers` type configured with the minimum number of UDP socket buffers
 /// sufficient for the operation of the Matter stack
-pub type EnetMatterUdpBuffers =
-    UdpBuffers<ENET_MAX_SOCKETS, MAX_TX_PACKET_SIZE, MAX_RX_PACKET_SIZE, ENET_MAX_META_DATA>;
+pub type EnetMatterUdpBuffers = UdpBuffers<
+    ENET_MAX_UDP_SOCKETS,
+    MAX_TX_PACKET_SIZE,
+    MAX_RX_PACKET_SIZE,
+    ENET_MAX_UDP_META_DATA,
+>;
 
 /// A type alias for the `StackResources` type configured with the minimum number of sockets
 /// sufficient for the operation of the Matter stack
@@ -41,9 +48,10 @@ pub type EnetMatterStackResources = StackResources<ENET_MIN_SOCKET_SET>;
 /// The maximum number of sockets that the Matter stack would use:
 /// - One, for the UDP socket used by the Matter protocol
 /// - Another, for the UDP socket used by the mDNS responder
-const ENET_MAX_SOCKETS: usize = 2;
+// TODO: Make it configurable with a feature
+const ENET_MAX_UDP_SOCKETS: usize = 2;
 /// The max number of meta data buffers that the Matter stack would use
-const ENET_MAX_META_DATA: usize = 4;
+const ENET_MAX_UDP_META_DATA: usize = 4;
 
 /// The MAC address used for mDNS multicast queries over IPv4
 ///
@@ -192,6 +200,74 @@ pub fn multicast_mac_for_link_local_ipv6(ip: &Ipv6Addr) -> [u8; 6] {
     mac[3..].copy_from_slice(&ip.octets()[13..]);
 
     mac
+}
+
+pub type EnetUdp<'a> =
+    Udp<'a, ENET_MAX_UDP_SOCKETS, MAX_TX_PACKET_SIZE, MAX_RX_PACKET_SIZE, ENET_MAX_UDP_META_DATA>;
+pub type EnetDns<'a> = Dns<'a>;
+
+/// An implementation of `NetStack` for the `embassy-net` stack
+// TODO: Implement optional TCP support with a feature flag
+pub struct EnetStack<'a> {
+    udp: EnetUdp<'a>,
+    dns: EnetDns<'a>,
+}
+
+impl<'a> EnetStack<'a> {
+    /// Create a new `EnetStack` instance
+    pub fn new(stack: Stack<'a>, buffers: &'a EnetMatterUdpBuffers) -> Self {
+        Self {
+            udp: EnetUdp::new(stack, buffers),
+            dns: EnetDns::new(stack),
+        }
+    }
+}
+
+impl<'a> NetStack for EnetStack<'a> {
+    type UdpBind<'t>
+        = &'t EnetUdp<'a>
+    where
+        Self: 't;
+
+    type UdpConnect<'t>
+        = NoopNet
+    where
+        Self: 't;
+
+    type TcpBind<'t>
+        = NoopNet
+    where
+        Self: 't;
+
+    type TcpConnect<'t>
+        = NoopNet
+    where
+        Self: 't;
+
+    type Dns<'t>
+        = &'t EnetDns<'a>
+    where
+        Self: 't;
+
+    fn udp_bind(&self) -> Option<Self::UdpBind<'_>> {
+        Some(&self.udp)
+    }
+
+    fn udp_connect(&self) -> Option<Self::UdpConnect<'_>> {
+        None
+    }
+
+    fn tcp_bind(&self) -> Option<Self::TcpBind<'_>> {
+        None
+    }
+
+    fn tcp_connect(&self) -> Option<Self::TcpConnect<'_>> {
+        None
+    }
+
+    fn dns(&self) -> Option<Self::Dns<'_>> {
+        Some(&self.dns)
+    }
 }
 
 #[cfg(test)]
