@@ -34,7 +34,13 @@ where
 
         let len = f(buffer).map_err(|_| SerializationError::InvalidData)?; // TODO
 
-        info!("Blob {}: stored {} bytes {:?}", self.0, len, &buffer[..len]);
+        debug!("Blob {}: stored {} bytes", self.0, len, &buffer[..len]);
+        trace!(
+            "Blob {} store details: stored {} bytes, data: {:?}",
+            self.0,
+            len,
+            &buffer[..len]
+        );
 
         Ok(len)
     }
@@ -85,8 +91,13 @@ where
 
         cb(data)?;
 
-        info!(
-            "Blob {}: loaded {:?} bytes {:?}",
+        debug!(
+            "Blob {}: loaded {:?} bytes",
+            key,
+            data.map(|data| data.len()),
+        );
+        trace!(
+            "Blob {} load details: loaded {:?} bytes, data: {:?}",
             key,
             data.map(|data| data.len()),
             data.map(Bytes)
@@ -126,7 +137,7 @@ where
         .await
         .map_err(to_persist_error)?;
 
-        info!("Blob {}: removed", key);
+        debug!("Blob {}: removed", key);
 
         Ok(())
     }
