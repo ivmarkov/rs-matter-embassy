@@ -34,7 +34,7 @@ where
 
         let len = f(buffer).map_err(|_| SerializationError::InvalidData)?; // TODO
 
-        debug!("Blob {}: stored {} bytes", self.0, len, &buffer[..len]);
+        debug!("Blob {}: stored {} bytes", self.0, len);
         trace!(
             "Blob {} store details: stored {} bytes, data: {:?}",
             self.0,
