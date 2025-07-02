@@ -2,7 +2,7 @@
 target = "thumbv6m-none-eabi"
 
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
-runner = "probe-rs run --chip RP2040 --always-print-stacktrace --catch-reset --catch-hardfault --log-format \"{t} {[{L}]%bold} {s}  {{c} {ff}:{l:1}%dimmed}\""
+runner = "probe-rs run --chip RP2040 --always-print-stacktrace --catch-reset --catch-hardfault"
 
 [unstable]
 build-std-features = ["panic_immediate_abort"]
