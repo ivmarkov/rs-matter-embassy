@@ -40,7 +40,7 @@ const MAX_CONNECTIONS: usize = 1;
 #[cfg(any(target_arch = "riscv32", target_arch = "xtensa"))]
 pub(crate) const MAX_MTU_SIZE: usize = 255;
 #[cfg(not(any(target_arch = "riscv32", target_arch = "xtensa")))]
-pub(crate) const MAX_MTU_SIZE: usize = 131;
+pub(crate) const MAX_MTU_SIZE: usize = 255;
 const MAX_CHANNELS: usize = 2;
 const ADV_SETS: usize = 1;
 
