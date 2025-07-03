@@ -134,7 +134,6 @@ export THREAD_DATASET="000003..."
 
 cd nrf
 
-cargo build
-
 # Replace `light_thread` with `light_eth` below to flash the Ethernet example
 cargo run --bin light_thread
+```
