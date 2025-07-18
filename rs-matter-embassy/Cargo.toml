@@ -18,8 +18,8 @@ harness = false
 #[patch.'https://github.com/ivmarkov/rs-matter-stack']
 #rs-matter-stack = { git = "https://github.com/ivmarkov//rs-matter-stack.git" }
 #rs-matter-stack = { path = "../../rs-matter-stack" }
-[patch.'https://github.com/esp-rs/openthread']
-openthread = { git = "https://github.com/esp-rs//openthread.git", branch = "next" }
+#[patch.'https://github.com/esp-rs/openthread']
+#openthread = { git = "https://github.com/esp-rs//openthread.git", branch = "next" }
 #openthread = { version = "0.1", path = "../../../esp-openthread/openthread" }
 
 [patch.crates-io]
