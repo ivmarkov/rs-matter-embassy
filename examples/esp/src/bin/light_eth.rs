@@ -72,7 +72,7 @@ async fn main(_s: Spawner) {
     // so we need to initialize the global `rand` fn once
     esp_init_rand(rng);
 
-    let init = esp_wifi::init(timg0.timer0, rng, peripherals.RADIO_CLK).unwrap();
+    let init = esp_wifi::init(timg0.timer0, rng).unwrap();
 
     #[cfg(not(feature = "esp32"))]
     {

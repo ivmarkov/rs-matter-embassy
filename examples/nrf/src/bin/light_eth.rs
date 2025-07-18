@@ -74,7 +74,6 @@ macro_rules! mk_static {
 }
 
 bind_interrupts!(struct Irqs {
-    RNG => rng::InterruptHandler<RNG>;
     RADIO => InterruptHandler<embassy_nrf::peripherals::RADIO>;
 });
 

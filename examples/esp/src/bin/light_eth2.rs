@@ -133,11 +133,9 @@ async fn main(_s: Spawner) {
     let ot_mdns = OtMdns::new(ot.clone(), mdns_services).unwrap();
 
     let mut ot_runner = pin!(async {
-        ot.run(EspRadio::new(Ieee802154::new(
-            peripherals.IEEE802154,
-            peripherals.RADIO_CLK,
-        )))
-        .await;
+        ot
+            .run(EspRadio::new(Ieee802154::new(peripherals.IEEE802154)))
+            .await;
         #[allow(unreachable_code)]
         Ok(())
     });

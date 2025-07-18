@@ -27,7 +27,8 @@ overflow-checks = false
 #[patch.'https://github.com/ivmarkov/rs-matter-stack']
 #rs-matter-stack = { git = "https://github.com/ivmarkov//rs-matter-stack.git" }
 #rs-matter-stack = { path = "../../../rs-matter-stack" }
-#[patch.'https://github.com/esp-rs/openthread']
+[patch.'https://github.com/esp-rs/openthread']
+openthread = { git = "https://github.com/ivmarkov/esp-openthread.git", branch = "next" }
 #openthread = { version = "0.1", path = "../../../esp-openthread/openthread" }
 
 [patch.crates-io]
@@ -39,17 +40,6 @@ rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "next" }
 #edge-mdns = { git = "https://github.com/ivmarkov/edge-net" }
 #trouble-host = { version = "0.2", git = "https://github.com/embassy-rs/trouble" }
 #trouble-host = { version = "0.2", path = "../../../trouble/host" }
-cyw43 = { version = "0.3", git = "https://github.com/embassy-rs/embassy" }
-cyw43-pio = { version = "0.4", git = "https://github.com/embassy-rs/embassy" }
-embassy-rp = { version = "0.4", git = "https://github.com/embassy-rs/embassy" }
-embassy-sync = { version = "0.7", git = "https://github.com/embassy-rs/embassy" }
-embassy-time = { version = "0.4", git = "https://github.com/embassy-rs/embassy" }
-embassy-time-driver = { version = "0.2", git = "https://github.com/embassy-rs/embassy" }
-embassy-time-queue-utils = { version = "0.1", git = "https://github.com/embassy-rs/embassy" }
-embassy-net-wiznet = { version = "0.2", git = "https://github.com/embassy-rs/embassy" }
-embassy-net-driver = { version = "0.2", git = "https://github.com/embassy-rs/embassy" }
-embassy-net-driver-channel = { version = "0.3", git = "https://github.com/embassy-rs/embassy" }
-embassy-executor = { version = "0.7", git = "https://github.com/embassy-rs/embassy" }
 
 [features]
 skip-cyw43-firmware = []
@@ -57,7 +47,7 @@ skip-cyw43-firmware = []
 [dependencies]
 embassy-executor = { version = "0.7", default-features = false, features = ["arch-cortex-m", "executor-thread", "defmt"] }
 embassy-time = { version = "0.4", default-features = false, features = ["defmt", "defmt-timestamp-uptime-ms"] }
-embassy-rp = { version = "0.4", features = ["defmt", "unstable-pac", "time-driver", "critical-section-impl", "rp2040"] }
+embassy-rp = { version = "0.6", features = ["defmt", "unstable-pac", "time-driver", "critical-section-impl", "rp2040"] }
 embassy-futures = "0.1.1"
 embassy-sync = { version = "0.7", features = ["defmt"] }
 defmt = "0.3"
@@ -66,13 +56,13 @@ rs-matter-embassy = { path = "../../rs-matter-embassy", features = ["embassy-net
 
 # Wireless examples
 bt-hci = { version = "0.3.2", default-features = false, features = ["defmt"] }
-cyw43 = { version = "0.3", features = ["firmware-logs", "defmt", "bluetooth"] }
-cyw43-pio = "0.4"
+cyw43 = { version = "0.4", features = ["firmware-logs", "defmt", "bluetooth"] }
+cyw43-pio = "0.5"
 
 # W5500 Ethernet examples
 embassy-net-wiznet = { version = "0.2", features = ["defmt"] }
 embedded-hal-bus = { version = "0.1", features = ["async"] }
-rand_core = "0.6.4"
+rand_core = "0.9"
 
 cortex-m = "0.7.6"
 cortex-m-rt = "0.7"
