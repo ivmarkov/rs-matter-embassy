@@ -360,7 +360,9 @@ pub mod esp_thread {
         where
             A: super::ThreadDriverTask,
         {
-            let radio = EspRadio::new(openthread::esp::Ieee802154::new(self.radio_peripheral.reborrow()));
+            let radio = EspRadio::new(openthread::esp::Ieee802154::new(
+                self.radio_peripheral.reborrow(),
+            ));
 
             task.run(radio).await
         }
@@ -371,7 +373,9 @@ pub mod esp_thread {
         where
             A: super::ThreadCoexDriverTask,
         {
-            let radio = EspRadio::new(openthread::esp::Ieee802154::new(self.radio_peripheral.reborrow()));
+            let radio = EspRadio::new(openthread::esp::Ieee802154::new(
+                self.radio_peripheral.reborrow(),
+            ));
 
             let ble_controller = ExternalController::<_, SLOTS>::new(BleConnector::new(
                 self.controller,
