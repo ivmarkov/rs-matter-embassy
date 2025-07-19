@@ -18,7 +18,6 @@ use embassy_futures::select::select4;
 
 use embassy_nrf::interrupt;
 use embassy_nrf::interrupt::{InterruptExt, Priority};
-use embassy_nrf::peripherals::RNG;
 use embassy_nrf::radio::InterruptHandler;
 use embassy_nrf::{bind_interrupts, rng};
 
