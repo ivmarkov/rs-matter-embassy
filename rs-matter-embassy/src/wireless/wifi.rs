@@ -3,6 +3,7 @@ use core::pin::pin;
 use embassy_futures::select::select;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use rs_matter_stack::mdns::BuiltinMdns;
 
 use crate::ble::{ControllerRef, TroubleBtpGattContext, TroubleBtpGattPeripheral};
 use crate::enet::{create_enet_stack, EnetNetif, EnetStack};
@@ -393,7 +394,7 @@ where
         let net_stack = EnetStack::new(stack, buffers);
         let netif = EnetNetif::new(stack, InterfaceTypeEnum::WiFi);
 
-        let mut main = pin!(self.task.run(&net_stack, &netif, &net_ctl));
+        let mut main = pin!(self.task.run(&net_stack, &netif, &net_ctl, BuiltinMdns));
         let mut run = pin!(async {
             runner.run().await;
             #[allow(unreachable_code)]
@@ -433,10 +434,12 @@ where
 
         let net_stack = EnetStack::new(stack, buffers);
         let netif = EnetNetif::new(stack, InterfaceTypeEnum::WiFi);
+        let mut peripheral = TroubleBtpGattPeripheral::new(ble_ctl, self.rand, self.ble_context);
 
-        let peripheral = TroubleBtpGattPeripheral::new(ble_ctl, self.rand, self.ble_context);
-
-        let mut main = pin!(self.task.run(&net_stack, &netif, &net_ctl, peripheral));
+        let mut main =
+            pin!(self
+                .task
+                .run(&net_stack, &netif, &net_ctl, BuiltinMdns, &mut peripheral));
         let mut run = pin!(async {
             runner.run().await;
             #[allow(unreachable_code)]

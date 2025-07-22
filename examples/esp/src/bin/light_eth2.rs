@@ -17,7 +17,7 @@ use core::pin::pin;
 use alloc::boxed::Box;
 
 use embassy_executor::Spawner;
-use embassy_futures::select::select4;
+use embassy_futures::select::select3;
 use embassy_time::{Duration, Timer};
 
 use esp_backtrace as _;
@@ -34,16 +34,14 @@ use rs_matter_embassy::matter::dm::devices::DEV_TYPE_ON_OFF_LIGHT;
 use rs_matter_embassy::matter::dm::{Async, Dataver, EmptyHandler, Endpoint, EpClMatcher, Node};
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
-use rs_matter_embassy::matter::{clusters, devices, BasicCommData, MATTER_PORT};
+use rs_matter_embassy::matter::{clusters, devices, BasicCommData};
 use rs_matter_embassy::ot::openthread::esp::EspRadio;
 use rs_matter_embassy::ot::openthread::{OpenThread, RamSettings};
 use rs_matter_embassy::ot::{OtMatterResources, OtMdns, OtNetStack, OtNetif};
 use rs_matter_embassy::rand::esp::{esp_init_rand, esp_rand};
 use rs_matter_embassy::stack::eth::EthMatterStack;
-use rs_matter_embassy::stack::mdns::MatterMdnsServices;
 use rs_matter_embassy::stack::persist::DummyKvBlobStore;
 use rs_matter_embassy::stack::rand::{MatterRngCore, RngCore};
-use rs_matter_embassy::stack::MdnsType;
 
 use tinyrlibc as _;
 
@@ -95,13 +93,6 @@ async fn main(_s: Spawner) {
     }
 
     // == Step 2: ==
-    // Replace the built-in Matter mDNS responder with a bridge that delegates
-    // all mDNS work to the OpenThread SRP client.
-    // Thread is not friendly to IpV6 multicast, so we have to use SRP instead.
-    let mdns_services = &*Box::leak(Box::new_uninit())
-        .init_with(MatterMdnsServices::init(&TEST_BASIC_INFO, MATTER_PORT));
-
-    // == Step 3: ==
     // Allocate the Matter stack.
     let stack = Box::leak(Box::new_uninit()).init_with(EthMatterStack::<()>::init(
         &TEST_BASIC_INFO,
@@ -110,7 +101,6 @@ async fn main(_s: Spawner) {
             discriminator,
         },
         &TEST_DEV_ATT,
-        MdnsType::Provided(mdns_services),
         epoch,
         esp_rand,
     ));
@@ -130,16 +120,9 @@ async fn main(_s: Spawner) {
     )
     .unwrap();
 
-    let ot_mdns = OtMdns::new(ot.clone(), mdns_services).unwrap();
-
     let mut ot_runner = pin!(async {
         ot.run(EspRadio::new(Ieee802154::new(peripherals.IEEE802154)))
             .await;
-        #[allow(unreachable_code)]
-        Ok(())
-    });
-    let mut ot_mdns_runner = pin!(async {
-        ot_mdns.run().await.unwrap();
         #[allow(unreachable_code)]
         Ok(())
     });
@@ -181,6 +164,8 @@ async fn main(_s: Spawner) {
         OtNetStack::new(ot.clone()),
         // The Matter stack needs access to the netif so as to detect network going up/down
         OtNetif::new(ot.clone()),
+        // The Matter stack needs an mDNS instance to run
+        OtMdns::new(ot.clone()),
         // The Matter stack needs a persister to store its state
         // `EmbassyPersist`+`EmbassyKvBlobStore` saves to a user-supplied NOR Flash region
         // However, for this demo and for simplicity, we use a dummy persister that does nothing
@@ -213,15 +198,10 @@ async fn main(_s: Spawner) {
     });
 
     // Schedule the Matter run & the device loop together
-    select4(
-        &mut matter,
-        &mut device,
-        &mut ot_runner,
-        &mut ot_mdns_runner,
-    )
-    .coalesce()
-    .await
-    .unwrap();
+    select3(&mut matter, &mut device, &mut ot_runner)
+        .coalesce()
+        .await
+        .unwrap();
 }
 
 /// Basic info about our device

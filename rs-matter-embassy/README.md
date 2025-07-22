@@ -55,7 +55,6 @@ use rs_matter_embassy::matter::utils::select::Coalesce;
 use rs_matter_embassy::matter::{clusters, devices};
 use rs_matter_embassy::rand::esp::{esp_init_rand, esp_rand};
 use rs_matter_embassy::stack::persist::DummyKvBlobStore;
-use rs_matter_embassy::stack::MdnsType;
 use rs_matter_embassy::wireless::esp::EspWifiDriver;
 use rs_matter_embassy::wireless::{EmbassyWifi, EmbassyWifiMatterStack};
 
@@ -86,7 +85,7 @@ async fn main(_s: Spawner) {
     // so we need to initialize the global `rand` fn once
     esp_init_rand(rng);
 
-    let init = esp_wifi::init(timg0.timer0, rng, peripherals.RADIO_CLK).unwrap();
+    let init = esp_wifi::init(timg0.timer0, rng).unwrap();
 
     #[cfg(not(feature = "esp32"))]
     {
@@ -107,7 +106,6 @@ async fn main(_s: Spawner) {
         &TEST_DEV_DET,
         TEST_DEV_COMM,
         &TEST_DEV_ATT,
-        MdnsType::Builtin,
         epoch,
         esp_rand,
     ));

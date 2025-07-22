@@ -1,6 +1,6 @@
 use core::pin::pin;
 
-use embassy_futures::select::select4;
+use embassy_futures::select::select3;
 use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 
 use openthread::{OpenThread, Radio};
@@ -14,7 +14,6 @@ use crate::matter::utils::select::Coalesce;
 use crate::matter::utils::sync::IfMutex;
 use crate::ot::{to_matter_err, OtNetCtl, OtNetStack, OtPersist};
 use crate::ot::{OtMatterResources, OtMdns, OtNetif};
-use crate::stack::mdns::MatterMdnsServices;
 use crate::stack::network::{Embedding, Network};
 use crate::stack::persist::{KvBlobStore, SharedKvBlobStore};
 use crate::stack::rand::MatterRngCore;
@@ -163,7 +162,6 @@ where
 /// A `Wireless` trait implementation for `openthread`'s Thread stack.
 pub struct EmbassyThread<'a, T, S> {
     driver: T,
-    mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
     ieee_eui64: [u8; 8],
     store: &'a SharedKvBlobStore<'a, S>,
     context: &'a OtNetContext,
@@ -179,7 +177,6 @@ where
     /// Create a new instance of the `EmbassyThread` type.
     pub fn new<E>(
         driver: T,
-        mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
         ieee_eui64: [u8; 8],
         store: &'a SharedKvBlobStore<'a, S>,
         stack: &'a EmbassyThreadMatterStack<'a, E>,
@@ -189,7 +186,6 @@ where
     {
         Self::wrap(
             driver,
-            mdns_services,
             ieee_eui64,
             store,
             stack.network().embedding().net_context(),
@@ -201,7 +197,6 @@ where
     /// Wrap an existing `ThreadDriver` with the given parameters.
     pub fn wrap(
         driver: T,
-        mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
         ieee_eui64: [u8; 8],
         store: &'a SharedKvBlobStore<'a, S>,
         context: &'a OtNetContext,
@@ -210,7 +205,6 @@ where
     ) -> Self {
         Self {
             driver,
-            mdns_services,
             ieee_eui64,
             store,
             context,
@@ -231,7 +225,6 @@ where
     {
         self.driver
             .run(ThreadDriverTaskImpl {
-                mdns_services: self.mdns_services,
                 ieee_eui64: self.ieee_eui64,
                 rand: self.rand,
                 store: self.store,
@@ -253,7 +246,6 @@ where
     {
         self.driver
             .run(ThreadCoexDriverTaskImpl {
-                mdns_services: self.mdns_services,
                 ieee_eui64: self.ieee_eui64,
                 rand: self.rand,
                 store: self.store,
@@ -843,7 +835,6 @@ pub mod nrf {
 }
 
 struct ThreadDriverTaskImpl<'a, A, S> {
-    mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
     ieee_eui64: [u8; 8],
     rand: Rand,
     store: &'a SharedKvBlobStore<'a, S>,
@@ -882,20 +873,19 @@ where
         let net_ctl = OtNetCtl::new(ot.clone());
         let net_stack = OtNetStack::new(ot.clone());
         let netif = OtNetif::new(ot.clone());
-        let mdns = OtMdns::new(ot.clone(), self.mdns_services).map_err(to_matter_err)?;
+        let mut mdns = OtMdns::new(ot.clone());
 
-        let mut main = pin!(self.task.run(&net_stack, &netif, &net_ctl));
+        let mut main = pin!(self.task.run(&net_stack, &netif, &net_ctl, &mut mdns));
         let mut radio = pin!(async {
             ot.run(radio).await;
             #[allow(unreachable_code)]
             Ok(())
         });
-        let mut mdns = pin!(async { mdns.run().await.map_err(to_matter_err) });
         let mut persist = pin!(persister.run());
         ot.enable_ipv6(true).map_err(to_matter_err)?;
         ot.srp_autostart().map_err(to_matter_err)?;
 
-        let result = select4(&mut main, &mut radio, &mut mdns, &mut persist)
+        let result = select3(&mut main, &mut radio, &mut persist)
             .coalesce()
             .await;
 
@@ -908,7 +898,6 @@ where
 }
 
 struct ThreadCoexDriverTaskImpl<'a, A, S> {
-    mdns_services: &'a MatterMdnsServices<'a, NoopRawMutex>,
     ieee_eui64: [u8; 8],
     rand: Rand,
     store: &'a SharedKvBlobStore<'a, S>,
@@ -949,22 +938,23 @@ where
         let net_ctl = OtNetCtl::new(ot.clone());
         let net_stack = OtNetStack::new(ot.clone());
         let netif = OtNetif::new(ot.clone());
-        let mdns = OtMdns::new(ot.clone(), self.mdns_services).map_err(to_matter_err)?;
+        let mut mdns = OtMdns::new(ot.clone());
+        let mut peripheral = TroubleBtpGattPeripheral::new(ble_ctl, self.rand, self.ble_context);
 
-        let peripheral = TroubleBtpGattPeripheral::new(ble_ctl, self.rand, self.ble_context);
-
-        let mut main = pin!(self.task.run(&net_stack, &netif, &net_ctl, peripheral));
+        let mut main =
+            pin!(self
+                .task
+                .run(&net_stack, &netif, &net_ctl, &mut mdns, &mut peripheral));
         let mut radio = pin!(async {
             ot.run(radio).await;
             #[allow(unreachable_code)]
             Ok(())
         });
-        let mut mdns = pin!(async { mdns.run().await.map_err(to_matter_err) });
         let mut persist = pin!(persister.run());
         ot.enable_ipv6(true).map_err(to_matter_err)?;
         ot.srp_autostart().map_err(to_matter_err)?;
 
-        let result = select4(&mut main, &mut radio, &mut mdns, &mut persist)
+        let result = select3(&mut main, &mut radio, &mut persist)
             .coalesce()
             .await;
 

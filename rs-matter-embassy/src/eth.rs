@@ -5,6 +5,7 @@ use core::pin::pin;
 
 use embassy_futures::select::select;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use rs_matter_stack::mdns::BuiltinMdns;
 
 use crate::enet::{
     create_enet_stack, EnetMatterStackResources, EnetMatterUdpBuffers, EnetNetif, EnetStack,
@@ -211,7 +212,7 @@ where
                 let net_stack = EnetStack::new(stack, buffers);
                 let netif = EnetNetif::new(stack, InterfaceTypeEnum::Ethernet);
 
-                let mut main = pin!(self.task.run(&net_stack, &netif));
+                let mut main = pin!(self.task.run(&net_stack, &netif, BuiltinMdns));
                 let mut run = pin!(async {
                     runner.run().await;
                     #[allow(unreachable_code)]

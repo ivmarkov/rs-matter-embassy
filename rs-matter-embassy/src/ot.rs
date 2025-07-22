@@ -12,8 +12,11 @@ use openthread::{
     Channels, OpenThread, OtError, OtResources, OtSrpResources, OtUdpResources, RamSettings,
     RamSettingsChange, SettingsKey, SharedRamSettings, SrpConf, SrpService,
 };
+use rs_matter_stack::matter::transport::network::mdns::Service;
+use rs_matter_stack::matter::Matter;
+use rs_matter_stack::mdns::Mdns;
 use rs_matter_stack::nal::noop::NoopNet;
-use rs_matter_stack::nal::NetStack;
+use rs_matter_stack::nal::{NetStack, UdpBind};
 
 use crate::fmt::Bytes;
 
@@ -29,12 +32,10 @@ use crate::matter::dm::clusters::wifi_diag::WirelessDiag;
 use crate::matter::dm::networks::NetChangeNotif;
 use crate::matter::error::Error;
 use crate::matter::error::ErrorCode;
-use crate::matter::mdns::ServiceMode;
 use crate::matter::transport::network::MAX_RX_PACKET_SIZE;
 use crate::matter::utils::init::zeroed;
 use crate::matter::utils::init::{init, Init};
 use crate::matter::utils::storage::Vec;
-use crate::stack::mdns::MatterMdnsServices;
 use crate::stack::persist::{KvBlobStore, SharedKvBlobStore, VENDOR_KEYS_START};
 
 /// Re-export the `openthread` crate
@@ -394,22 +395,16 @@ impl ThreadDiag for OtNetCtl<'_> {
 /// An mDNS trait implementation for `openthread` using Thread SRP
 pub struct OtMdns<'d> {
     ot: OpenThread<'d>,
-    services: &'d MatterMdnsServices<'d, NoopRawMutex>,
 }
 
 impl<'d> OtMdns<'d> {
     /// Create a new `OtMdns` instance
-    pub fn new(
-        ot: OpenThread<'d>,
-        services: &'d MatterMdnsServices<'d, NoopRawMutex>,
-    ) -> Result<Self, OtError> {
-        Ok(Self { ot, services })
+    pub const fn new(ot: OpenThread<'d>) -> Self {
+        Self { ot }
     }
 
     /// Run the `OtMdns` instance by listening to the mDNS services and registering them with the SRP server
-    pub async fn run(&self) -> Result<(), OtError> {
-        self.services.broadcast_signal().reset();
-
+    pub async fn run(&self, matter: &Matter<'_>) -> Result<(), OtError> {
         loop {
             // TODO: Not very efficient to remove and re-add everything
 
@@ -459,37 +454,55 @@ impl<'d> OtMdns<'d> {
 
             info!("Registered SRP host {}", hostname);
 
-            unwrap!(self.services.visit_services(|matter_mode, matter_service| {
-                let name = if matches!(matter_mode, ServiceMode::Commissioned) {
-                    "_matter._tcp"
-                } else {
-                    "_matterc._udp"
-                };
+            unwrap!(matter.mdns_services(|matter_service| {
+                Service::call_with(
+                    &matter_service,
+                    matter.dev_det(),
+                    matter.port(),
+                    |service| {
+                        unwrap!(self.ot.srp_add_service(&SrpService {
+                            name: service.service_protocol,
+                            instance_name: service.name,
+                            port: service.port,
+                            subtype_labels: service.service_subtypes.iter().cloned(),
+                            txt_entries: service
+                                .txt_kvs
+                                .iter()
+                                .cloned()
+                                .filter(|(k, _)| !k.is_empty())
+                                .map(|(k, v)| (k, v.as_bytes())),
+                            priority: 0,
+                            weight: 0,
+                            lease_secs: 0,
+                            key_lease_secs: 0,
+                        })); // TODO
 
-                unwrap!(self.ot.srp_add_service(&SrpService {
-                    name,
-                    instance_name: matter_service.name,
-                    port: matter_service.port,
-                    subtype_labels: matter_service.service_subtypes.iter().cloned(),
-                    txt_entries: matter_service
-                        .txt_kvs
-                        .iter()
-                        .cloned()
-                        .filter(|(k, _)| !k.is_empty())
-                        .map(|(k, v)| (k, v.as_bytes())),
-                    priority: 0,
-                    weight: 0,
-                    lease_secs: 0,
-                    key_lease_secs: 0,
-                })); // TODO
+                        info!("Added service {:?}", matter_service);
 
-                info!("Added service {} of type {}", matter_service.name, name);
-
-                Ok(())
+                        Ok(())
+                    },
+                )
             }));
 
-            self.services.broadcast_signal().wait().await;
+            matter.wait_mdns().await;
         }
+    }
+}
+
+impl Mdns for OtMdns<'_> {
+    async fn run<U>(
+        &mut self,
+        matter: &Matter<'_>,
+        _udp: U,
+        _mac: &[u8],
+        _ipv4: core::net::Ipv4Addr,
+        _ipv6: core::net::Ipv6Addr,
+        _interface: u32,
+    ) -> Result<(), Error>
+    where
+        U: UdpBind,
+    {
+        OtMdns::run(self, matter).await.map_err(to_matter_err)
     }
 }
 

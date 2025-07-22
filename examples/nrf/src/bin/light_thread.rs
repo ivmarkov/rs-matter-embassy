@@ -20,7 +20,6 @@ use embassy_nrf::{bind_interrupts, rng};
 
 use embassy_executor::{InterruptExecutor, Spawner};
 use embassy_futures::select::select;
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::{Duration, Timer};
 
 use embedded_alloc::LlffHeap;
@@ -36,12 +35,10 @@ use rs_matter_embassy::matter::dm::devices::DEV_TYPE_ON_OFF_LIGHT;
 use rs_matter_embassy::matter::dm::{Async, Dataver, EmptyHandler, Endpoint, EpClMatcher, Node};
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
-use rs_matter_embassy::matter::{clusters, devices, BasicCommData, MATTER_PORT};
+use rs_matter_embassy::matter::{clusters, devices, BasicCommData};
 use rs_matter_embassy::rand::nrf::{nrf_init_rand, nrf_rand};
-use rs_matter_embassy::stack::mdns::MatterMdnsServices;
 use rs_matter_embassy::stack::persist::DummyKvBlobStore;
 use rs_matter_embassy::stack::rand::RngCore;
-use rs_matter_embassy::stack::MdnsType;
 use rs_matter_embassy::wireless::nrf::{
     NrfThreadClockInterruptHandler, NrfThreadDriver, NrfThreadHighPrioInterruptHandler,
     NrfThreadLowPrioInterruptHandler, NrfThreadRadioResources, NrfThreadRadioRunner,
@@ -126,13 +123,6 @@ async fn main(_s: Spawner) {
     nrf_init_rand(rng);
 
     // == Step 2: ==
-    // Replace the built-in Matter mDNS responder with a bridge that delegates
-    // all mDNS work to the OpenThread SRP client.
-    // Thread is not friendly to IpV6 multicast, so we have to use SRP instead.
-    let mdns_services = &*mk_static!(MatterMdnsServices<'static, NoopRawMutex>)
-        .init_with(MatterMdnsServices::init(&TEST_BASIC_INFO, MATTER_PORT));
-
-    // == Step 3: ==
     // Allocate the Matter stack.
     // For MCUs, it is best to allocate it statically, so as to avoid program stack blowups (its memory footprint is ~ 35 to 50KB).
     // It is also (currently) a mandatory requirement when the wireless stack variation is used.
@@ -143,7 +133,6 @@ async fn main(_s: Spawner) {
             discriminator,
         },
         &TEST_DEV_ATT,
-        MdnsType::Provided(mdns_services),
         epoch,
         nrf_rand,
     ));
@@ -214,7 +203,7 @@ async fn main(_s: Spawner) {
     let store = stack.create_shared_store(DummyKvBlobStore);
     let mut matter = pin!(stack.run(
         // The Matter stack needs to instantiate `openthread`
-        EmbassyThread::new(thread_driver, mdns_services, ieee_eui64, &store, stack),
+        EmbassyThread::new(thread_driver, ieee_eui64, &store, stack),
         // The Matter stack needs a persister to store its state
         &store,
         // Our `AsyncHandler` + `AsyncMetadata` impl

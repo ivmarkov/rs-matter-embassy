@@ -14,7 +14,7 @@ use core::mem::MaybeUninit;
 use core::pin::pin;
 use core::ptr::addr_of_mut;
 
-use embassy_futures::select::select4;
+use embassy_futures::select::select3;
 
 use embassy_nrf::interrupt;
 use embassy_nrf::interrupt::{InterruptExt, Priority};
@@ -22,7 +22,6 @@ use embassy_nrf::radio::InterruptHandler;
 use embassy_nrf::{bind_interrupts, rng};
 
 use embassy_executor::{InterruptExecutor, Spawner};
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 
 use embassy_time::{Duration, Timer};
 
@@ -39,7 +38,7 @@ use rs_matter_embassy::matter::dm::devices::DEV_TYPE_ON_OFF_LIGHT;
 use rs_matter_embassy::matter::dm::{Async, Dataver, EmptyHandler, Endpoint, EpClMatcher, Node};
 use rs_matter_embassy::matter::utils::init::InitMaybeUninit;
 use rs_matter_embassy::matter::utils::select::Coalesce;
-use rs_matter_embassy::matter::{clusters, devices, BasicCommData, MATTER_PORT};
+use rs_matter_embassy::matter::{clusters, devices, BasicCommData};
 use rs_matter_embassy::ot::openthread::nrf::NrfRadio;
 use rs_matter_embassy::ot::openthread::{
     Capabilities, EmbassyTimeTimer, OpenThread, PhyRadioRunner, ProxyRadio, ProxyRadioResources,
@@ -48,10 +47,8 @@ use rs_matter_embassy::ot::openthread::{
 use rs_matter_embassy::ot::{OtMatterResources, OtMdns, OtNetStack, OtNetif};
 use rs_matter_embassy::rand::nrf::{nrf_init_rand, nrf_rand};
 use rs_matter_embassy::stack::eth::EthMatterStack;
-use rs_matter_embassy::stack::mdns::MatterMdnsServices;
 use rs_matter_embassy::stack::persist::DummyKvBlobStore;
 use rs_matter_embassy::stack::rand::{MatterRngCore, RngCore};
-use rs_matter_embassy::stack::MdnsType;
 
 use panic_rtt_target as _;
 
@@ -128,13 +125,6 @@ async fn main(_s: Spawner) {
     nrf_init_rand(rng);
 
     // == Step 2: ==
-    // Replace the built-in Matter mDNS responder with a bridge that delegates
-    // all mDNS work to the OpenThread SRP client.
-    // Thread is not friendly to IpV6 multicast, so we have to use SRP instead.
-    let mdns_services = &*mk_static!(MatterMdnsServices<'static, NoopRawMutex>)
-        .init_with(MatterMdnsServices::init(&TEST_BASIC_INFO, MATTER_PORT));
-
-    // == Step 3: ==
     // Allocate the Matter stack.
     // For MCUs, it is best to allocate it statically, so as to avoid program stack blowups (its memory footprint is ~ 35 to 50KB).
     // It is also (currently) a mandatory requirement when the wireless stack variation is used.
@@ -145,7 +135,6 @@ async fn main(_s: Spawner) {
             discriminator,
         },
         &TEST_DEV_ATT,
-        MdnsType::Provided(mdns_services),
         epoch,
         nrf_rand,
     ));
@@ -180,15 +169,8 @@ async fn main(_s: Spawner) {
         &mut ot_resources.srp,
     ));
 
-    let ot_mdns = unwrap!(OtMdns::new(ot.clone(), mdns_services));
-
     let mut ot_runner = pin!(async {
         ot.run(radio_proxy).await;
-        #[allow(unreachable_code)]
-        Ok(())
-    });
-    let mut ot_mdns_runner = pin!(async {
-        unwrap!(ot_mdns.run().await);
         #[allow(unreachable_code)]
         Ok(())
     });
@@ -233,6 +215,8 @@ async fn main(_s: Spawner) {
         OtNetStack::new(ot.clone()),
         // The Matter stack needs access to the netif so as to detect network going up/down
         OtNetif::new(ot.clone()),
+        // The Matter stack needs an mDNS to run
+        OtMdns::new(ot.clone()),
         // The Matter stack needs a persister to store its state
         &store,
         // Our `AsyncHandler` + `AsyncMetadata` impl
@@ -264,14 +248,9 @@ async fn main(_s: Spawner) {
 
     // Schedule the Matter run & the device loop together
     unwrap!(
-        select4(
-            &mut matter,
-            &mut device,
-            &mut ot_runner,
-            &mut ot_mdns_runner,
-        )
-        .coalesce()
-        .await
+        select3(&mut matter, &mut device, &mut ot_runner,)
+            .coalesce()
+            .await
     );
 }
 

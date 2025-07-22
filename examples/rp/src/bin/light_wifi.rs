@@ -51,7 +51,6 @@ use rs_matter_embassy::matter::utils::select::Coalesce;
 use rs_matter_embassy::matter::{clusters, devices};
 use rs_matter_embassy::rand::rp::rp_rand;
 use rs_matter_embassy::stack::persist::DummyKvBlobStore;
-use rs_matter_embassy::stack::MdnsType;
 use rs_matter_embassy::wifi::rp::Cyw43WifiController;
 use rs_matter_embassy::wireless::{EmbassyWifi, EmbassyWifiMatterStack, PreexistingWifiDriver};
 
@@ -166,7 +165,6 @@ async fn main(spawner: Spawner) {
         &TEST_DEV_DET,
         TEST_DEV_COMM,
         &TEST_DEV_ATT,
-        MdnsType::Builtin,
         epoch,
         rp_rand,
     ));
