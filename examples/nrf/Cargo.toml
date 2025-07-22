@@ -38,10 +38,8 @@ rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "next" }
 #edge-nal = { git = "https://github.com/ivmarkov/edge-net" }
 #edge-nal-embassy = { git = "https://github.com/ivmarkov/edge-net" }
 #edge-mdns = { git = "https://github.com/ivmarkov/edge-net" }
-#nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc.git" }
-#nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git" }
-nrf-sdc = { git = "https://github.com/Dirbaio/nrf-sdc", branch = "update-deps-2" }
-nrf-mpsl = { git = "https://github.com/Dirbaio/nrf-sdc.git", branch = "update-deps-2" }
+nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc.git" }
+nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git" }
 #trouble-host = { version = "0.2", git = "https://github.com/embassy-rs/trouble" }
 #trouble-host = { version = "0.2", path = "../../../trouble/host" }
 
