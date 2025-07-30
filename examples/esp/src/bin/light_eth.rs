@@ -48,6 +48,8 @@ extern crate alloc;
 const WIFI_SSID: &str = env!("WIFI_SSID");
 const WIFI_PASS: &str = env!("WIFI_PASS");
 
+esp_bootloader_esp_idf::esp_app_desc!();
+
 #[esp_hal_embassy::main]
 async fn main(_s: Spawner) {
     esp_println::logger::init_logger(log::LevelFilter::Info);
@@ -253,7 +255,13 @@ fn init_heap() {
 
     #[cfg(not(feature = "esp32"))]
     {
-        static mut HEAP: MaybeUninit<[u8; 186 * 1024]> = MaybeUninit::uninit();
+        #[cfg(any(feature = "esp32c3", feature = "esp32h2"))]
+        const HEAP_SIZE: usize = 160 * 1024; // 160KB for ESP32-C3 and ESP32-H2
+
+        #[cfg(not(any(feature = "esp32c3", feature = "esp32h2")))]
+        const HEAP_SIZE: usize = 186 * 1024; // More for the other chips that have more SRAM
+
+        static mut HEAP: MaybeUninit<[u8; HEAP_SIZE]> = MaybeUninit::uninit();
 
         add_region(unsafe { &mut HEAP });
     }
