@@ -25,7 +25,7 @@ incremental = false
 overflow-checks = false
 
 #[patch.'https://github.com/ivmarkov/rs-matter-stack']
-rs-matter-stack = { git = "https://github.com/ivmarkov//rs-matter-stack.git" }
+#rs-matter-stack = { git = "https://github.com/ivmarkov//rs-matter-stack.git" }
 #rs-matter-stack = { path = "../../../rs-matter-stack" }
 #[patch.'https://github.com/esp-rs/openthread']
 #openthread = { git = "https://github.com/ivmarkov/esp-openthread.git", branch = "next" }
@@ -38,8 +38,8 @@ rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "next" }
 #edge-nal = { git = "https://github.com/ivmarkov/edge-net" }
 #edge-nal-embassy = { git = "https://github.com/ivmarkov/edge-net" }
 #edge-mdns = { git = "https://github.com/ivmarkov/edge-net" }
-nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc.git" }
-nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git" }
+nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "b15c91008f085c8c1f21fdbfc176a60dee4ab9fa" }
+nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc.git", rev = "b15c91008f085c8c1f21fdbfc176a60dee4ab9fa" }
 #trouble-host = { version = "0.2", git = "https://github.com/embassy-rs/trouble" }
 #trouble-host = { version = "0.2", path = "../../../trouble/host" }
 
