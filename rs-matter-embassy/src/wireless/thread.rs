@@ -829,7 +829,8 @@ pub mod nrf {
     {
     }
 
-    fn to_matter_err<E>(_: E) -> Error {
+    fn to_matter_err<E: core::fmt::Debug>(e: E) -> Error {
+        error!("BLE error: {:?}", debug2format!(e));
         Error::new(ErrorCode::BtpError)
     }
 }

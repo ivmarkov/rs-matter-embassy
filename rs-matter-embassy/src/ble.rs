@@ -34,13 +34,7 @@ use trouble_host::{self, Address, BleHostError, Controller, HostResources};
 use crate::fmt::Bytes;
 
 const MAX_CONNECTIONS: usize = 1;
-// Issue with esp32c6: we can't go lower than 255 on it
-// Issue with esp32: we can't go lower than 251 on it
-// TODO: Make the MTU size a feature in future
-#[cfg(any(target_arch = "riscv32", target_arch = "xtensa"))]
-pub(crate) const MAX_MTU_SIZE: usize = 255;
-#[cfg(not(any(target_arch = "riscv32", target_arch = "xtensa")))]
-pub(crate) const MAX_MTU_SIZE: usize = 255;
+pub(crate) const MAX_MTU_SIZE: usize = DefaultPacketPool::MTU;
 const MAX_CHANNELS: usize = 2;
 const ADV_SETS: usize = 1;
 
@@ -462,7 +456,10 @@ where
     {
         TroubleBtpGattPeripheral::run(self, service_name, adv_data, callback)
             .await
-            .map_err(|_| ErrorCode::BtpError)?;
+            .map_err(|_| {
+                error!("Running TroubleBtpGattPeripheral failed");
+                ErrorCode::BtpError
+            })?;
 
         Ok(())
     }
