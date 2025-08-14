@@ -12,7 +12,7 @@ on:
 env:
 # Until latest nightly is able to compile `embassy-rp`'s inline assembly that contains `.macro` defs again
 #  rust_toolchain: nightly
-  rust_toolchain: nighly-2025-08-12
+  rust_toolchain: nightly-2025-08-12
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
