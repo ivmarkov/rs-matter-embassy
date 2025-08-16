@@ -24,8 +24,8 @@ codegen-units = 1
 incremental = false
 overflow-checks = false
 
-#[patch.'https://github.com/ivmarkov/rs-matter-stack']
-#rs-matter-stack = { git = "https://github.com/ivmarkov//rs-matter-stack.git" }
+[patch.'https://github.com/ivmarkov/rs-matter-stack']
+rs-matter-stack = { git = "https://github.com/ivmarkov//rs-matter-stack.git", branch = "new-clusters-api" }
 #rs-matter-stack = { path = "../../../rs-matter-stack" }
 #[patch.'https://github.com/esp-rs/openthread']
 #openthread = { git = "https://github.com/ivmarkov/esp-openthread.git", branch = "next" }
@@ -33,7 +33,7 @@ overflow-checks = false
 
 [patch.crates-io]
 #rs-matter = { git = "https://github.com/project-chip/rs-matter" }
-rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "next" }
+rs-matter = { git = "https://github.com/ivmarkov/rs-matter", branch = "global-handler-access" }
 #rs-matter = { path = "../../../rs-matter/rs-matter" }
 #edge-nal = { git = "https://github.com/ivmarkov/edge-net" }
 #edge-nal-embassy = { git = "https://github.com/ivmarkov/edge-net" }
